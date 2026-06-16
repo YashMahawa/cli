@@ -1,4 +1,3 @@
-import json
 import re
 import socket
 import time
@@ -8,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from caelestia.utils import hypr
 from caelestia.utils.io import error, fatal, info, log, warn, log_exception
-from caelestia.utils.paths import get_config
+from caelestia.utils.paths import get_config, user_config_path
 
 
 class WindowRule:
@@ -25,9 +24,8 @@ class Command:
         self.args = args
         self.timeout_tracker: dict[str, float] = {}
         
-        config = get_config()
-        self.enable_fallback_heuristic = config.get("resizer", {}).get("enableFallbackHeuristic", False)
-        self.window_rules = self._load_window_rules(config)
+        self.enable_fallback_heuristic = False
+        self.window_rules = self._load_window_rules()
 
     def _make_resize_cmd(self, width: int | str, height: int | str, address: str) -> str:
         if hypr.is_lua_config():
@@ -49,11 +47,18 @@ class Command:
             return "dispatch hl.dsp.window.center()"
         return "dispatch centerwindow"
 
-    def _load_window_rules(self, config: dict[str, Any]) -> list[WindowRule]:
+    def _load_window_rules(self) -> list[WindowRule]:
         default_rules = [
             WindowRule("(Bitwarden", "initialTitleContains", "20%", "54%", ["float", "center"]),
             WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "initialTitleRegex", "", "", ["pip"]),
+            WindowRule("(?i)Sign In", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)Verification", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)Splash", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)^(?!.*The Updater).*Updater.*$", "initialTitleRegex", "", "", ["float", "center"]),
         ]
+
+        config = get_config()
+        self.enable_fallback_heuristic = config.get("resizer", {}).get("enableFallbackHeuristic", False)
 
         try:
             if "resizer" in config and "rules" in config["resizer"]:
@@ -68,7 +73,7 @@ class Command:
                             rule_config["actions"],
                         )
                     )
-                return rules
+                return rules + default_rules
         except KeyError:
             warn("invalid config, falling back to default rules")
         except FileNotFoundError:
@@ -224,6 +229,15 @@ class Command:
     def _match_window_rule(
         self, window_title: str, initial_title: str, window_class: str = "", initial_class: str = ""
     ) -> WindowRule | None:
+        try:
+            current_mtime = user_config_path.stat().st_mtime
+        except FileNotFoundError:
+            current_mtime = 0.0
+
+        if getattr(self, "last_config_mtime", -1.0) != current_mtime:
+            self.last_config_mtime = current_mtime
+            self.window_rules = self._load_window_rules()
+
         for rule in self.window_rules:
             if rule.match_type == "initialTitle":
                 if initial_title == rule.name:
