@@ -24,7 +24,10 @@ class Command:
     def __init__(self, args: Namespace) -> None:
         self.args = args
         self.timeout_tracker: dict[str, float] = {}
-        self.window_rules = self._load_window_rules()
+        
+        config = get_config()
+        self.enable_fallback_heuristic = config.get("resizer", {}).get("enableFallbackHeuristic", False)
+        self.window_rules = self._load_window_rules(config)
 
     def _make_resize_cmd(self, width: int | str, height: int | str, address: str) -> str:
         if hypr.is_lua_config():
@@ -46,13 +49,12 @@ class Command:
             return "dispatch hl.dsp.window.center()"
         return "dispatch centerwindow"
 
-    def _load_window_rules(self) -> list[WindowRule]:
+    def _load_window_rules(self, config: dict[str, Any]) -> list[WindowRule]:
         default_rules = [
             WindowRule("(Bitwarden", "initialTitleContains", "20%", "54%", ["float", "center"]),
             WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "initialTitleRegex", "", "", ["pip"]),
         ]
 
-        config = get_config()
         try:
             if "resizer" in config and "rules" in config["resizer"]:
                 rules = []
@@ -349,7 +351,7 @@ class Command:
                     return
 
                 size = window_info.get("size", [0, 0])
-                if isinstance(size, list) and len(size) == 2:
+                if self.enable_fallback_heuristic and isinstance(size, list) and len(size) == 2:
                     w, h = size
                     if w > 0 and h > 0:
                         ratio = w / h
