@@ -144,6 +144,12 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     resizer_parser.add_argument("width", nargs="?", help="width to resize to")
     resizer_parser.add_argument("height", nargs="?", help="height to resize to")
     resizer_parser.add_argument("actions", nargs="?", help="comma-separated actions to apply (float,center,pip)")
+    resizer_parser.add_argument(
+        "--match",
+        action="append",
+        metavar="RULE",
+        help="match criteria in the format key[:predicate]=value (e.g., class=Gimp, title:regex=^Foo)",
+    )
 
     # Create parser for install opts
     install_parser = command_parser.add_parser(
