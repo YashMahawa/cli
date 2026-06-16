@@ -14,7 +14,7 @@ class Command:
         if self.args.print:
             print(json.dumps(get_colours_for_wall(self.args.print, self.args.no_smart)))
         elif self.args.file:
-            set_wallpaper(self.args.file, self.args.no_smart)
+            set_wallpaper(self.args.file, self.args.no_smart, sync=getattr(self.args, "sync", False))
         elif self.args.random:
             set_random(self.args)
         else:

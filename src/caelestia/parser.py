@@ -71,6 +71,7 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     set_parser.add_argument("-f", "--flavour", help="the flavour to switch to")
     set_parser.add_argument("-m", "--mode", choices=["dark", "light"], help="the mode to switch to")
     set_parser.add_argument("-v", "--variant", choices=scheme_variants, help="the variant to switch to")
+    set_parser.add_argument("--sync", action="store_true", help="run theme application synchronously for validation")
 
     # Create parser for screenshot opts
     screenshot_parser = command_parser.add_parser("screenshot", help="take a screenshot")
@@ -110,6 +111,7 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     )
     wallpaper_parser.add_argument("-f", "--file", help="the path to the wallpaper to switch to")
     wallpaper_parser.add_argument("-n", "--no-filter", action="store_true", help="do not filter by size")
+    wallpaper_parser.add_argument("--sync", action="store_true", help="run theme application synchronously for validation")
     wallpaper_parser.add_argument(
         "-t",
         "--threshold",

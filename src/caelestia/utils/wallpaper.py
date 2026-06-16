@@ -147,7 +147,7 @@ def convert_gif(wall: Path) -> Path:
     return output_path
 
 
-def set_wallpaper(wall: Path, no_smart: bool) -> None:
+def set_wallpaper(wall: Path, no_smart: bool, sync: bool = False) -> None:
     # Make path absolute
     wall = Path(wall).resolve()
 
@@ -182,7 +182,7 @@ def set_wallpaper(wall: Path, no_smart: bool) -> None:
 
     # Update colours
     scheme.update_colours()
-    apply_colours(scheme.colours, scheme.mode)
+    apply_colours(scheme.colours, scheme.mode, sync=sync)
 
     # Run custom post-hook if configured
     cfg = get_config().get("wallpaper", {})
@@ -219,4 +219,4 @@ def set_random(args: Namespace) -> None:
     except (FileNotFoundError, ValueError):
         pass
 
-    set_wallpaper(random.choice(wallpapers), args.no_smart)
+    set_wallpaper(random.choice(wallpapers), args.no_smart, sync=getattr(args, "sync", False))

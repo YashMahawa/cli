@@ -443,6 +443,13 @@ def _high_priority_tasks(colours: dict[str, str], mode: str, cfg: dict) -> None:
         if check("enableCava"):
             futures.append(pool.submit(apply_cava, colours))
         wait(futures)
+        for future in futures:
+            try:
+                future.result()
+            except Exception as e:
+                import traceback
+                print(f"Theme high-priority task failed: {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
 
 def _low_priority_tasks(colours: dict[str, str], mode: str, cfg: dict, scheme_info: dict) -> None:
@@ -480,6 +487,13 @@ def _low_priority_tasks(colours: dict[str, str], mode: str, cfg: dict, scheme_in
             futures.append(pool.submit(run_hook))
             
         wait(futures)
+        for future in futures:
+            try:
+                future.result()
+            except Exception as e:
+                import traceback
+                print(f"Theme low-priority task failed: {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
 
 def _worker_process(data: dict) -> None:
@@ -544,7 +558,7 @@ def _theme_daemon() -> None:
         time.sleep(0.1)
 
 
-def apply_colours(colours: dict[str, str], mode: str) -> None:
+def apply_colours(colours: dict[str, str], mode: str, sync: bool = False) -> None:
     c_state_dir.mkdir(parents=True, exist_ok=True)
     scheme = get_scheme()
     
@@ -561,13 +575,20 @@ def apply_colours(colours: dict[str, str], mode: str) -> None:
             "colours": json.dumps(scheme.colours)
         }
     }
+
+    if sync:
+        _worker_process(request)
+        return
     
     queue_file = c_state_dir / "theme_queue.json"
     atomic_write(queue_file, json.dumps(request))
 
+    log_file = c_state_dir / "theme_daemon.log"
+    log_fd = open(log_file, "a")
+
     subprocess.Popen(
         [sys.executable, "-c", "from caelestia.utils.theme import _theme_daemon; _theme_daemon()"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_fd,
+        stderr=log_fd,
         start_new_session=True
     )
