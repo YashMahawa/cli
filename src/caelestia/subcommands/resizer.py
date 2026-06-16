@@ -24,6 +24,14 @@ class WindowRule:
             self.matches = []
             if match_type == "initialTitle":
                 self.matches.append(("initialTitle", "exact", name))
+            elif match_type == "initialTitleContains":
+                self.matches.append(("initialTitle", "contains", name))
+            elif match_type == "initialTitleRegex":
+                self.matches.append(("initialTitle", "regex", name))
+            elif match_type == "initialClass":
+                self.matches.append(("initialClass", "exact", name))
+            elif match_type == "class":
+                self.matches.append(("class", "exact", name))
             elif match_type == "titleContains":
                 self.matches.append(("title", "contains", name))
             elif match_type == "titleExact":
@@ -88,6 +96,8 @@ class Command:
     def __init__(self, args: Namespace) -> None:
         self.args = args
         self.timeout_tracker: dict[str, float] = {}
+        
+        self.enable_fallback_heuristic = False
         self.window_rules = self._load_window_rules()
 
     def _make_resize_cmd(self, width: int | str, height: int | str, address: str) -> str:
@@ -112,15 +122,17 @@ class Command:
 
     def _load_window_rules(self) -> list[WindowRule]:
         default_rules = [
-            WindowRule("(Bitwarden", "titleContains", "20%", "54%", ["float", "center"]),
-            WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "titleRegex", "", "", ["pip"]),
-            WindowRule("(?i)Sign In", "titleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)Verification", "titleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)Splash", "titleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)^(?!.*The Updater).*Updater.*$", "titleRegex", "", "", ["float", "center"]),
+            WindowRule("(Bitwarden", "initialTitleContains", "20%", "54%", ["float", "center"]),
+            WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "initialTitleRegex", "", "", ["pip"]),
+            WindowRule("(?i)Sign In", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)Verification", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)Splash", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)^(?!.*The Updater).*Updater.*$", "initialTitleRegex", "", "", ["float", "center"]),
         ]
 
         config = get_config()
+        self.enable_fallback_heuristic = config.get("resizer", {}).get("enableFallbackHeuristic", False)
+
         try:
             if "resizer" in config and "rules" in config["resizer"]:
                 rules = []
@@ -273,7 +285,8 @@ class Command:
             self._apply_pip_action(window_id)
             return True
 
-        dispatch_commands.append(self._make_resize_cmd(width, height, f"0x{window_id}"))
+        if width and height:
+            dispatch_commands.append(self._make_resize_cmd(width, height, f"0x{window_id}"))
 
         if "center" in actions:
             dispatch_commands.append(self._make_center_cmd())
@@ -328,6 +341,8 @@ class Command:
 
             window_title = window_info.get("title", "")
             initial_title = window_info.get("initialTitle", "")
+            window_class = window_info.get("class", "")
+            initial_class = window_info.get("initialClass", "")
 
             log(f"Window 0x{window_id} - Title: '{window_title}' | Initial: '{initial_title}'")
 
@@ -369,6 +384,7 @@ class Command:
                     "title": title,
                     "initialTitle": title,
                     "class": window_class,
+                    "initialClass": window_class,
                     "workspace": {"name": workspace}
                 }
 
@@ -380,6 +396,34 @@ class Command:
 
                 info(f"Matched rule '{rule.name}' for new window 0x{window_id}")
                 self._apply_window_actions(window_id, rule.width, rule.height, rule.actions)
+                return
+
+            if window_info:
+                modal_state = window_info.get("modal", False)
+                parent_addr = window_info.get("parent", "")
+                xdg_parent = window_info.get("xdg_toplevel_parent", "")
+                
+                has_parent = bool(parent_addr) and parent_addr not in ("0x0", "", "0")
+                has_xdg_parent = bool(xdg_parent) and xdg_parent not in ("0x0", "", "0")
+
+                if modal_state or has_parent or has_xdg_parent:
+                    if self._is_rate_limited(window_id):
+                        return
+                    info(f"Protocol signal detected (modal/parent) for 0x{window_id}. Floating automatically.")
+                    self._apply_window_actions(window_id, "", "", ["float", "center"])
+                    return
+
+                size = window_info.get("size", [0, 0])
+                if self.enable_fallback_heuristic and isinstance(size, list) and len(size) == 2:
+                    w, h = size
+                    if w > 0 and h > 0:
+                        ratio = w / h
+                        if 200 <= w <= 1000 and 100 <= h <= 800 and 0.5 <= ratio <= 2.5:
+                            if self._is_rate_limited(window_id):
+                                return
+                            info(f"Fallback heuristic matched (size {w}x{h}) for 0x{window_id}. Floating automatically.")
+                            self._apply_window_actions(window_id, "", "", ["float", "center"])
+                            return
 
         except (IndexError, ValueError) as e:
             warn(f"failed to parse window open event: {e}")
@@ -517,6 +561,8 @@ class Command:
 
                 window_title = window.get("title", "")
                 initial_title = window.get("initialTitle", "")
+                window_class = window.get("class", "")
+                initial_class = window.get("initialClass", "")
 
                 # Check if window matches the pattern
                 if temp_rule.evaluate(window):

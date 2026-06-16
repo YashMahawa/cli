@@ -138,8 +138,8 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         "match_type",
         nargs="?",
         metavar="match_type",
-        choices=["titleContains", "titleExact", "titleRegex", "initialTitle"],
-        help="type of pattern matching (titleContains,titleExact,titleRegex,initialTitle)",
+        choices=["titleContains", "titleExact", "titleRegex", "initialTitle", "initialTitleContains", "initialTitleRegex", "initialClass", "class"],
+        help="type of pattern matching (titleContains,titleExact,titleRegex,initialTitle,initialTitleContains,initialTitleRegex,initialClass,class)",
     )
     resizer_parser.add_argument("width", nargs="?", help="width to resize to")
     resizer_parser.add_argument("height", nargs="?", help="height to resize to")
