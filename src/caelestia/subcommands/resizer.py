@@ -38,7 +38,19 @@ class WindowRule:
             
         for prop, predicate, value in self.matches:
             normalized_prop = "class" if prop == "window_class" else prop
-            window_val = str(window_info.get(normalized_prop, ""))
+            
+            current_val = window_info
+            for part in normalized_prop.split('.'):
+                if isinstance(current_val, dict):
+                    current_val = current_val.get(part, "")
+                else:
+                    current_val = ""
+                    break
+            
+            if prop == "workspace" and isinstance(current_val, dict):
+                current_val = current_val.get("name", current_val.get("id", ""))
+            
+            window_val = str(current_val)
             
             if predicate == "exact":
                 if window_val != value:

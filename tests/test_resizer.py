@@ -36,9 +36,15 @@ class TestWindowRule(unittest.TestCase):
             ("class", "exact", "Browser"),
             ("workspace", "exact", "2")
         ])
-        self.assertTrue(rule.evaluate({"class": "Browser", "workspace": "2"}))
-        self.assertFalse(rule.evaluate({"class": "Browser", "workspace": "1"}))
-        self.assertFalse(rule.evaluate({"class": "Term", "workspace": "2"}))
+        # Use realistic Hyprland format for workspace
+        self.assertTrue(rule.evaluate({"class": "Browser", "workspace": {"id": 2, "name": "2"}}))
+        self.assertFalse(rule.evaluate({"class": "Browser", "workspace": {"id": 1, "name": "1"}}))
+        self.assertFalse(rule.evaluate({"class": "Term", "workspace": {"id": 2, "name": "2"}}))
+
+    def test_generic_match_nested(self):
+        rule = WindowRule("", "", "100", "100", [], matches=[("workspace.name", "exact", "special:scratchpad")])
+        self.assertTrue(rule.evaluate({"workspace": {"id": -99, "name": "special:scratchpad"}}))
+        self.assertFalse(rule.evaluate({"workspace": {"id": 1, "name": "1"}}))
 
     def test_parse_match_arg(self):
         self.assertEqual(_parse_match_arg("class=Gimp"), ("class", "exact", "Gimp"))
