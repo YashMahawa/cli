@@ -5,6 +5,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
+import time
+import uuid
+import multiprocessing
+import signal
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 from caelestia.utils.colour import get_dynamic_colours
@@ -405,74 +411,163 @@ def apply_user_templates(colours: dict[str, str], mode: str) -> None:
             atomic_write(theme_dir / file.name, content)
 
 
-def apply_colours(colours: dict[str, str], mode: str) -> None:
-    # Use file-based lock to prevent concurrent theme changes
-    lock_file = c_state_dir / "theme.lock"
-    c_state_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        with open(lock_file, "w") as lock_fd:
-            try:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return
+def _high_priority_tasks(colours: dict[str, str], mode: str, cfg: dict) -> None:
+    def check(key: str) -> bool:
+        return cfg[key] if key in cfg else True
 
-            cfg = get_config().get("theme", {})
+    icon_theme = cfg.get(f"iconTheme{mode.capitalize()}") or cfg.get("iconTheme")
 
-            def check(key: str) -> bool:
-                return cfg[key] if key in cfg else True
+    with ThreadPoolExecutor() as pool:
+        futures = []
+        if check("enableTerm"):
+            futures.append(pool.submit(apply_terms, gen_sequences(colours)))
+        if check("enableHypr"):
+            futures.append(pool.submit(apply_hypr, gen_lua(colours) if is_lua_config() else gen_conf(colours)))
+        if check("enableFuzzel"):
+            futures.append(pool.submit(apply_fuzzel, colours))
+        if check("enableBtop"):
+            futures.append(pool.submit(apply_btop, colours))
+        if check("enableNvtop"):
+            futures.append(pool.submit(apply_nvtop, colours))
+        if check("enableHtop"):
+            futures.append(pool.submit(apply_htop, colours))
+        if check("enableGtk"):
+            futures.append(pool.submit(apply_gtk, colours, mode, icon_theme))
+        if check("enableQt"):
+            futures.append(pool.submit(apply_qt, colours, mode, icon_theme))
+        if check("enableWarp"):
+            futures.append(pool.submit(apply_warp, colours, mode))
+        if check("enableZed"):
+            futures.append(pool.submit(apply_zed, colours, mode))
+        if check("enableCava"):
+            futures.append(pool.submit(apply_cava, colours))
+        wait(futures)
 
-            if check("enableTerm"):
-                apply_terms(gen_sequences(colours))
-            if check("enableHypr"):
-                apply_hypr(gen_lua(colours) if is_lua_config() else gen_conf(colours))
-            if check("enableDiscord"):
-                apply_discord(gen_scss(colours))
-            if check("enableSpicetify"):
-                apply_spicetify(colours, mode)
-            if check("enablePandora"):
-                apply_pandora(colours, mode)
-            if check("enableFuzzel"):
-                apply_fuzzel(colours)
-            if check("enableBtop"):
-                apply_btop(colours)
-            if check("enableNvtop"):
-                apply_nvtop(colours)
-            if check("enableHtop"):
-                apply_htop(colours)
-            icon_theme = cfg.get(f"iconTheme{mode.capitalize()}") or cfg.get("iconTheme")
-            if check("enableGtk"):
-                apply_gtk(colours, mode, icon_theme)
-            if check("enableQt"):
-                apply_qt(colours, mode, icon_theme)
-            if check("enableWarp"):
-                apply_warp(colours, mode)
-            if check("enableChromium"):
-                apply_chromium(colours)
-            if check("enableZed"):
-                apply_zed(colours, mode)
-            if check("enableCava"):
-                apply_cava(colours)
-            apply_user_templates(colours, mode)
 
-            if post_hook := cfg.get("postHook"):
-                scheme = get_scheme()
+def _low_priority_tasks(colours: dict[str, str], mode: str, cfg: dict, scheme_info: dict) -> None:
+    def check(key: str) -> bool:
+        return cfg[key] if key in cfg else True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = []
+        if check("enableDiscord"):
+            futures.append(pool.submit(apply_discord, gen_scss(colours)))
+        if check("enableSpicetify"):
+            futures.append(pool.submit(apply_spicetify, colours, mode))
+        if check("enablePandora"):
+            futures.append(pool.submit(apply_pandora, colours, mode))
+        if check("enableChromium"):
+            futures.append(pool.submit(apply_chromium, colours))
+        
+        futures.append(pool.submit(apply_user_templates, colours, mode))
+
+        if post_hook := cfg.get("postHook"):
+            def run_hook():
                 subprocess.run(
                     post_hook,
                     shell=True,
                     env={
                         **os.environ,
-                        "SCHEME_NAME": scheme.name,
-                        "SCHEME_FLAVOUR": scheme.flavour,
-                        "SCHEME_MODE": scheme.mode,
-                        "SCHEME_VARIANT": scheme.variant,
-                        "SCHEME_COLOURS": json.dumps(scheme.colours),
+                        "SCHEME_NAME": scheme_info["name"],
+                        "SCHEME_FLAVOUR": scheme_info["flavour"],
+                        "SCHEME_MODE": scheme_info["mode"],
+                        "SCHEME_VARIANT": scheme_info["variant"],
+                        "SCHEME_COLOURS": scheme_info["colours"],
                     },
                     stderr=subprocess.DEVNULL,
                 )
+            futures.append(pool.submit(run_hook))
+            
+        wait(futures)
 
-    finally:
+
+def _worker_process(data: dict) -> None:
+    os.setpgrp()
+    colours = data["colours"]
+    mode = data["mode"]
+    cfg = data["cfg"]
+    scheme_info = data["scheme_info"]
+
+    _high_priority_tasks(colours, mode, cfg)
+    _low_priority_tasks(colours, mode, cfg, scheme_info)
+
+
+def _theme_daemon() -> None:
+    lock_file = c_state_dir / "theme_worker.lock"
+    c_state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_fd = open(lock_file, "w")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception:
+        return
+
+    queue_file = c_state_dir / "theme_queue.json"
+    last_req_id = None
+    worker_proc = None
+    idle_time = 0.0
+
+    while True:
+        data = None
+        req_id = None
         try:
-            lock_file.unlink()
-        except FileNotFoundError:
+            if queue_file.exists():
+                content = queue_file.read_text()
+                data = json.loads(content)
+                req_id = data.get("id")
+        except Exception:
             pass
+
+        if req_id and req_id != last_req_id:
+            if worker_proc is not None and worker_proc.is_alive():
+                if worker_proc.pid:
+                    try:
+                        os.killpg(worker_proc.pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+                worker_proc.join()
+
+            last_req_id = req_id
+            idle_time = 0.0
+
+            worker_proc = multiprocessing.Process(
+                target=_worker_process,
+                args=(data,)
+            )
+            worker_proc.start()
+
+        if worker_proc is None or not worker_proc.is_alive():
+            idle_time += 0.1
+            if idle_time > 5.0:
+                break
+
+        time.sleep(0.1)
+
+
+def apply_colours(colours: dict[str, str], mode: str) -> None:
+    c_state_dir.mkdir(parents=True, exist_ok=True)
+    scheme = get_scheme()
+    
+    request = {
+        "id": str(uuid.uuid4()),
+        "colours": colours,
+        "mode": mode,
+        "cfg": get_config().get("theme", {}),
+        "scheme_info": {
+            "name": scheme.name,
+            "flavour": scheme.flavour,
+            "mode": scheme.mode,
+            "variant": scheme.variant,
+            "colours": json.dumps(scheme.colours)
+        }
+    }
+    
+    queue_file = c_state_dir / "theme_queue.json"
+    atomic_write(queue_file, json.dumps(request))
+
+    subprocess.Popen(
+        [sys.executable, "-c", "from caelestia.utils.theme import _theme_daemon; _theme_daemon()"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
