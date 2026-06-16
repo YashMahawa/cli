@@ -48,8 +48,8 @@ class Command:
 
     def _load_window_rules(self) -> list[WindowRule]:
         default_rules = [
-            WindowRule("(Bitwarden", "titleContains", "20%", "54%", ["float", "center"]),
-            WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "titleRegex", "", "", ["pip"]),
+            WindowRule("(Bitwarden", "initialTitleContains", "20%", "54%", ["float", "center"]),
+            WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "initialTitleRegex", "", "", ["pip"]),
         ]
 
         config = get_config()
@@ -205,7 +205,8 @@ class Command:
             self._apply_pip_action(window_id)
             return True
 
-        dispatch_commands.append(self._make_resize_cmd(width, height, f"0x{window_id}"))
+        if width and height:
+            dispatch_commands.append(self._make_resize_cmd(width, height, f"0x{window_id}"))
 
         if "center" in actions:
             dispatch_commands.append(self._make_center_cmd())
@@ -218,10 +219,24 @@ class Command:
             error(f"failed to apply window actions for window 0x{window_id}: {e}")
             return False
 
-    def _match_window_rule(self, window_title: str, initial_title: str) -> WindowRule | None:
+    def _match_window_rule(
+        self, window_title: str, initial_title: str, window_class: str = "", initial_class: str = ""
+    ) -> WindowRule | None:
         for rule in self.window_rules:
             if rule.match_type == "initialTitle":
                 if initial_title == rule.name:
+                    return rule
+            elif rule.match_type == "initialTitleContains":
+                if rule.name in initial_title:
+                    return rule
+            elif rule.match_type == "initialTitleRegex":
+                try:
+                    if re.search(rule.name, initial_title):
+                        return rule
+                except re.error:
+                    warn(f"invalid regex pattern in rule '{rule.name}'")
+            elif rule.match_type == "initialClass":
+                if initial_class == rule.name:
                     return rule
             elif rule.match_type == "titleContains":
                 if rule.name in window_title:
@@ -235,6 +250,9 @@ class Command:
                         return rule
                 except re.error:
                     warn(f"invalid regex pattern in rule '{rule.name}'")
+            elif rule.match_type == "class":
+                if window_class == rule.name:
+                    return rule
 
         return None
 
@@ -265,10 +283,12 @@ class Command:
 
             window_title = window_info.get("title", "")
             initial_title = window_info.get("initialTitle", "")
+            window_class = window_info.get("class", "")
+            initial_class = window_info.get("initialClass", "")
 
             log(f"Window 0x{window_id} - Title: '{window_title}' | Initial: '{initial_title}'")
 
-            rule = self._match_window_rule(window_title, initial_title)
+            rule = self._match_window_rule(window_title, initial_title, window_class, initial_class)
             if rule:
                 if self._is_rate_limited(window_id):
                     log(f"Rate limited: skipping window 0x{window_id}")
@@ -299,7 +319,11 @@ class Command:
 
             log(f"New window 0x{window_id} - Title: '{title}' | Class: '{window_class}'")
 
-            rule = self._match_window_rule(title, title)
+            window_info = self._get_window_info(window_id)
+            initial_title = window_info.get("initialTitle", title) if window_info else title
+            initial_class = window_info.get("initialClass", window_class) if window_info else window_class
+
+            rule = self._match_window_rule(title, initial_title, window_class, initial_class)
             if rule:
                 if self._is_rate_limited(window_id):
                     log(f"Rate limited: skipping window 0x{window_id}")
@@ -307,6 +331,34 @@ class Command:
 
                 info(f"Matched rule '{rule.name}' for new window 0x{window_id}")
                 self._apply_window_actions(window_id, rule.width, rule.height, rule.actions)
+                return
+
+            if window_info:
+                modal_state = window_info.get("modal", False)
+                parent_addr = window_info.get("parent", "")
+                xdg_parent = window_info.get("xdg_toplevel_parent", "")
+                
+                has_parent = bool(parent_addr) and parent_addr not in ("0x0", "", "0")
+                has_xdg_parent = bool(xdg_parent) and xdg_parent not in ("0x0", "", "0")
+
+                if modal_state or has_parent or has_xdg_parent:
+                    if self._is_rate_limited(window_id):
+                        return
+                    info(f"Protocol signal detected (modal/parent) for 0x{window_id}. Floating automatically.")
+                    self._apply_window_actions(window_id, "", "", ["float", "center"])
+                    return
+
+                size = window_info.get("size", [0, 0])
+                if isinstance(size, list) and len(size) == 2:
+                    w, h = size
+                    if w > 0 and h > 0:
+                        ratio = w / h
+                        if 200 <= w <= 1000 and 100 <= h <= 800 and 0.5 <= ratio <= 2.5:
+                            if self._is_rate_limited(window_id):
+                                return
+                            info(f"Fallback heuristic matched (size {w}x{h}) for 0x{window_id}. Floating automatically.")
+                            self._apply_window_actions(window_id, "", "", ["float", "center"])
+                            return
 
         except (IndexError, ValueError) as e:
             warn(f"failed to parse window open event: {e}")
@@ -429,11 +481,23 @@ class Command:
 
                 window_title = window.get("title", "")
                 initial_title = window.get("initialTitle", "")
+                window_class = window.get("class", "")
+                initial_class = window.get("initialClass", "")
 
                 # Check if window matches the pattern
                 matches = False
                 if temp_rule.match_type == "initialTitle":
                     matches = initial_title == temp_rule.name
+                elif temp_rule.match_type == "initialTitleContains":
+                    matches = temp_rule.name in initial_title
+                elif temp_rule.match_type == "initialTitleRegex":
+                    try:
+                        matches = bool(re.search(temp_rule.name, initial_title))
+                    except re.error:
+                        warn(f"invalid regex pattern '{temp_rule.name}'")
+                        return []
+                elif temp_rule.match_type == "initialClass":
+                    matches = initial_class == temp_rule.name
                 elif temp_rule.match_type == "titleContains":
                     matches = temp_rule.name in window_title
                 elif temp_rule.match_type == "titleExact":
@@ -444,6 +508,8 @@ class Command:
                     except re.error:
                         warn(f"invalid regex pattern '{temp_rule.name}'")
                         return []
+                elif temp_rule.match_type == "class":
+                    matches = window_class == temp_rule.name
 
                 if matches:
                     matching_windows.append(window)
