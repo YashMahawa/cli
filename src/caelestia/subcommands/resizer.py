@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from caelestia.utils import hypr
-from caelestia.utils.io import error, fatal, info, log, warn
+from caelestia.utils.io import error, fatal, info, log, warn, log_exception
 from caelestia.utils.paths import get_config
 
 
@@ -454,28 +454,101 @@ class Command:
             error(f"failed to find matching windows: {e}")
             return []
 
+    @log_exception
+    def _attempt_connection(self) -> bool:
+        """Attempts to connect to socket and process events. Returns True if cleanly exited, False on EOF."""
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1.0)
+            sock.connect(hypr.socket2_path)
+            
+            info("Connected to Hyprland socket, listening for events...")
+            self.connected = True
+
+            while self.running:
+                try:
+                    data = sock.recv(4096).decode()
+                    if not data:
+                        warn("Hyprland socket closed (EOF)")
+                        return False
+                    for line in data.strip().split("\n"):
+                        if line:
+                            self._handle_window_event(line)
+                except socket.timeout:
+                    continue
+                except BlockingIOError:
+                    continue
+            return True
+
+    def _wait(self, duration: float) -> None:
+        elapsed = 0.0
+        while self.running and elapsed < duration:
+            time.sleep(0.1)
+            elapsed += 0.1
+
     def _run_daemon(self) -> None:
+        import os
+        import signal
+        import tempfile
+
+        pid_file = Path(tempfile.gettempdir()) / "caelestia-resizer.pid"
+        
+        if pid_file.exists():
+            try:
+                old_pid = int(pid_file.read_text().strip())
+                os.kill(old_pid, 0)
+                fatal(f"Daemon is already running with PID {old_pid}")
+            except (ValueError, OSError):
+                pass
+                
+        try:
+            pid_file.write_text(str(os.getpid()))
+        except Exception as e:
+            fatal(f"Could not write PID file: {e}")
+
+        self.running = True
+        
+        def handle_sig(signum, frame):
+            self.running = False
+
+        signal.signal(signal.SIGTERM, handle_sig)
+        signal.signal(signal.SIGINT, handle_sig)
+
         info("Hyprland window resizer started")
         info(f"Loaded {len(self.window_rules)} window rules")
 
-        socket_path = Path(hypr.socket2_path)
-        if not socket_path.exists():
-            fatal(f"Hyprland socket not found at {socket_path}")
+        backoff = 1.0
+        max_backoff = 5.0
 
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.connect(hypr.socket2_path)
+            while self.running:
+                socket_path = Path(hypr.socket2_path)
+                if not socket_path.exists():
+                    warn(f"Hyprland socket not found at {socket_path}, retrying in {backoff}s...")
+                    self._wait(backoff)
+                    backoff = min(backoff * 2.0, max_backoff)
+                    continue
 
-                info("Connected to Hyprland socket, listening for events...")
+                self.connected = False
+                self._attempt_connection()
+                
+                if not self.running:
+                    break
 
-                while True:
-                    data = sock.recv(4096).decode()
-                    if data:
-                        for line in data.strip().split("\n"):
-                            if line:
-                                self._handle_window_event(line)
-
+                if self.connected:
+                    backoff = 1.0
+                else:
+                    warn(f"Connection attempt failed, retrying in {backoff}s...")
+                    self._wait(backoff)
+                    backoff = min(backoff * 2.0, max_backoff)
+                
         except KeyboardInterrupt:
-            info("Resizer daemon stopped")
+            pass
         except Exception as e:
             error(str(e))
+        finally:
+            info("Resizer daemon stopped")
+            if pid_file.exists():
+                try:
+                    pid_file.unlink()
+                except Exception:
+                    pass
