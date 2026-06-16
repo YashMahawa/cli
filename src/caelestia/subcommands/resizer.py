@@ -12,12 +12,65 @@ from caelestia.utils.paths import get_config
 
 
 class WindowRule:
-    def __init__(self, name: str, match_type: str, width: str, height: str, actions: list[str]):
+    def __init__(self, name: str, match_type: str, width: str, height: str, actions: list[str], matches: Optional[list[tuple[str, str, str]]] = None):
         self.name = name
         self.match_type = match_type
         self.width = width
         self.height = height
         self.actions = actions
+        
+        if matches is not None:
+            self.matches = matches
+        else:
+            self.matches = []
+            if match_type == "initialTitle":
+                self.matches.append(("initialTitle", "exact", name))
+            elif match_type == "titleContains":
+                self.matches.append(("title", "contains", name))
+            elif match_type == "titleExact":
+                self.matches.append(("title", "exact", name))
+            elif match_type == "titleRegex":
+                self.matches.append(("title", "regex", name))
+
+    def evaluate(self, window_info: dict) -> bool:
+        if not self.matches:
+            return False
+            
+        for prop, predicate, value in self.matches:
+            normalized_prop = "class" if prop == "window_class" else prop
+            window_val = str(window_info.get(normalized_prop, ""))
+            
+            if predicate == "exact":
+                if window_val != value:
+                    return False
+            elif predicate == "contains":
+                if value not in window_val:
+                    return False
+            elif predicate == "regex":
+                try:
+                    if not re.search(value, window_val):
+                        return False
+                except re.error:
+                    warn(f"invalid regex pattern '{value}'")
+                    return False
+            else:
+                if window_val != value:
+                    return False
+                    
+        return True
+
+def _parse_match_arg(match_str: str) -> tuple[str, str, str]:
+    if "=" not in match_str:
+        return ("", "", "")
+    
+    key_part, value = match_str.split("=", 1)
+    if ":" in key_part:
+        prop, predicate = key_part.split(":", 1)
+    else:
+        prop = key_part
+        predicate = "exact"
+        
+    return (prop, predicate, value)
 
 
 class Command:
@@ -218,24 +271,10 @@ class Command:
             error(f"failed to apply window actions for window 0x{window_id}: {e}")
             return False
 
-    def _match_window_rule(self, window_title: str, initial_title: str) -> WindowRule | None:
+    def _match_window_rule(self, window_info: dict) -> WindowRule | None:
         for rule in self.window_rules:
-            if rule.match_type == "initialTitle":
-                if initial_title == rule.name:
-                    return rule
-            elif rule.match_type == "titleContains":
-                if rule.name in window_title:
-                    return rule
-            elif rule.match_type == "titleExact":
-                if window_title == rule.name:
-                    return rule
-            elif rule.match_type == "titleRegex":
-                try:
-                    if re.search(rule.name, window_title):
-                        return rule
-                except re.error:
-                    warn(f"invalid regex pattern in rule '{rule.name}'")
-
+            if rule.evaluate(window_info):
+                return rule
         return None
 
     def _handle_window_event(self, event: str) -> None:
@@ -268,7 +307,7 @@ class Command:
 
             log(f"Window 0x{window_id} - Title: '{window_title}' | Initial: '{initial_title}'")
 
-            rule = self._match_window_rule(window_title, initial_title)
+            rule = self._match_window_rule(window_info)
             if rule:
                 if self._is_rate_limited(window_id):
                     log(f"Rate limited: skipping window 0x{window_id}")
@@ -299,7 +338,17 @@ class Command:
 
             log(f"New window 0x{window_id} - Title: '{title}' | Class: '{window_class}'")
 
-            rule = self._match_window_rule(title, title)
+            window_info = self._get_window_info(window_id)
+            if not window_info:
+                window_info = {
+                    "address": f"0x{window_id}",
+                    "title": title,
+                    "initialTitle": title,
+                    "class": window_class,
+                    "workspace": {"name": workspace}
+                }
+
+            rule = self._match_window_rule(window_info)
             if rule:
                 if self._is_rate_limited(window_id):
                     log(f"Rate limited: skipping window 0x{window_id}")
@@ -316,9 +365,9 @@ class Command:
             self._run_daemon()
         elif hasattr(self.args, "pattern") and self.args.pattern == "pip":
             self._run_pip_mode()
-        elif all(
-            hasattr(self.args, attr) and getattr(self.args, attr)
-            for attr in ["pattern", "match_type", "width", "height", "actions"]
+        elif (
+            all(hasattr(self.args, attr) and getattr(self.args, attr) for attr in ["pattern", "match_type", "width", "height", "actions"])
+            or (hasattr(self.args, "match") and getattr(self.args, "match") and getattr(self.args, "width") and getattr(self.args, "height") and getattr(self.args, "actions"))
         ):
             self._run_active_mode()
         else:
@@ -357,7 +406,22 @@ class Command:
         try:
             # Create a temporary rule from command line arguments
             actions = self.args.actions.split(",") if self.args.actions else []
-            temp_rule = WindowRule(self.args.pattern, self.args.match_type, self.args.width, self.args.height, actions)
+            matches = []
+            
+            if hasattr(self.args, "match") and getattr(self.args, "match"):
+                for match_str in self.args.match:
+                    prop, pred, val = _parse_match_arg(match_str)
+                    if prop:
+                        matches.append((prop, pred, val))
+                        
+            temp_rule = WindowRule(
+                getattr(self.args, "pattern", "") or "",
+                getattr(self.args, "match_type", "") or "",
+                getattr(self.args, "width", "") or "",
+                getattr(self.args, "height", "") or "",
+                actions,
+                matches=matches if matches else None
+            )
 
             # Special case: "active" pattern means only target the currently active window
             if temp_rule.name.lower() == "active":
@@ -431,21 +495,7 @@ class Command:
                 initial_title = window.get("initialTitle", "")
 
                 # Check if window matches the pattern
-                matches = False
-                if temp_rule.match_type == "initialTitle":
-                    matches = initial_title == temp_rule.name
-                elif temp_rule.match_type == "titleContains":
-                    matches = temp_rule.name in window_title
-                elif temp_rule.match_type == "titleExact":
-                    matches = window_title == temp_rule.name
-                elif temp_rule.match_type == "titleRegex":
-                    try:
-                        matches = bool(re.search(temp_rule.name, window_title))
-                    except re.error:
-                        warn(f"invalid regex pattern '{temp_rule.name}'")
-                        return []
-
-                if matches:
+                if temp_rule.evaluate(window):
                     matching_windows.append(window)
 
             return matching_windows
