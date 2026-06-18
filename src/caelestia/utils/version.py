@@ -49,13 +49,18 @@ def print_version() -> None:
     local_shell_dir = config_dir / "quickshell/caelestia"
     if local_shell_dir.exists():
         print("\nLocal copy of shell found:")
+        local_shell_git_dir = local_shell_dir / ".git"
+
+        if not local_shell_git_dir.exists():
+            print("    Not a git checkout; this looks like a synced config copy.")
+            return
 
         try:
             shell_ver = subprocess.check_output(
                 [
                     "git",
                     "--git-dir",
-                    local_shell_dir / ".git",
+                    local_shell_git_dir,
                     "rev-list",
                     "--format=%B",
                     "--max-count=1",
@@ -69,9 +74,13 @@ def print_version() -> None:
         except subprocess.CalledProcessError:
             print("    Unable to determine last merged upstream commit.")
 
-        shell_ver = subprocess.check_output(
-            ["git", "--git-dir", local_shell_dir / ".git", "rev-list", "--format=%B", "--max-count=1", "HEAD"],
-            text=True,
-        )
-        print("\n    Last commit:", shell_ver.split()[1])
-        print("    Commit message:", *shell_ver.splitlines()[1:])
+        try:
+            shell_ver = subprocess.check_output(
+                ["git", "--git-dir", local_shell_git_dir, "rev-list", "--format=%B", "--max-count=1", "HEAD"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            print("\n    Last commit:", shell_ver.split()[1])
+            print("    Commit message:", *shell_ver.splitlines()[1:])
+        except (IndexError, subprocess.CalledProcessError):
+            print("    Unable to determine local shell commit.")
