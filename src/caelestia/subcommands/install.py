@@ -1,20 +1,25 @@
-import os
 import shutil
-import subprocess
 import textwrap
 from argparse import Namespace
 from pathlib import Path
 
 from caelestia.utils.dots.deployer import Deployer
-from caelestia.utils.dots.manifest import ComponentError, Manifest, ManifestError, expand, expand_dests
-from caelestia.utils.dots.packages import DEFAULT_AUR_HELPER, PackageInstaller
+from caelestia.utils.dots.legacy import (
+    LEGACY_META_PKG,
+    detect_legacy_repo,
+    legacy_config_symlinks,
+    legacy_symlinks,
+    legacy_to_delete,
+)
+from caelestia.utils.dots.manifest import ComponentError, Manifest, ManifestError
+from caelestia.utils.dots.misc import build_local_packages, run_hooks
+from caelestia.utils.dots.packages import DEFAULT_AUR_HELPER, PackageError, PackageInstaller
 from caelestia.utils.dots.source import DotsSource, SourceError
 from caelestia.utils.dots.state import DotsState
-from caelestia.utils.io import PROMPT_COLOUR, confirm, disable_input, fatal, format_msg, info, log, pause, prompt, warn
+from caelestia.utils.io import confirm, disable_input, fatal, info, log, pause, prompt_selection, warn
 from caelestia.utils.paths import (
     config_backup_dir,
     config_dir,
-    dots_dir,
 )
 
 
@@ -22,6 +27,21 @@ def _parse_list_arg(value: str | None) -> list[str] | None:
     if value is None:
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _deref_symlink(link: Path, target: Path) -> None:
+    """Replace symlink `link` with a real copy of `target`'s content."""
+
+    bak = link.rename(link.parent / f"{link.name}.bak")
+    try:
+        if target.is_dir():
+            shutil.copytree(target, link, symlinks=True)
+        else:
+            shutil.copy2(target, link)
+    except OSError:
+        bak.rename(link)
+        raise
+    bak.unlink()
 
 
 class Command:
@@ -36,20 +56,28 @@ class Command:
 
         self.print_greeting()
         self.create_backup()
+        legacy_dir = detect_legacy_repo()  # Detect legacy repo first cause deploy overwrites legacy syms
 
         source, tip, manifest = self.fetch_manifest()
-        self.deploy_configs(source, manifest)
-        helper, packages, local_packages = self.install_packages(source, manifest)
-        self.run_hooks(manifest)
+        try:
+            installer, packages, local_packages = self.install_packages(source, manifest)
+        except PackageError as e:
+            fatal(e)
+        run_hooks(manifest, "post_package")
+        self.dereference_legacy(legacy_dir)  # Copy legacy content into place before deploy overwrites the symlinks
+        deployed = self.deploy_configs(source, manifest)
+        run_hooks(manifest, "post_install")
 
         DotsState(
-            aur_helper=helper,
+            aur_helper=getattr(installer, "helper", DEFAULT_AUR_HELPER),
             applied_rev=tip,
             enabled_components=manifest.enabled_components,
             packages=packages,
             local_packages=local_packages,
+            deployed_files=deployed,
         ).save()
 
+        self.migrate_legacy(installer, legacy_dir)
         self.print_done()
 
     def print_greeting(self) -> None:
@@ -108,10 +136,14 @@ class Command:
         disable = _parse_list_arg(self.args.disable_components)
         try:
             manifest = source.manifest_at(tip)
-            manifest.resolve_components(enable=enable, disable=disable)
 
+            # No flags given, prompt user for non-default components
             if enable is None and disable is None:
-                self.prompt_optional_components(manifest)
+                optional = [name for name, comp in manifest.components.items() if not comp.default]
+                if optional:
+                    enable = prompt_selection(optional, "Components to enable?")
+
+            manifest.resolve_components(enable=enable, disable=disable)
         except (SourceError, ManifestError, ComponentError) as e:
             fatal(e)
 
@@ -120,72 +152,17 @@ class Command:
 
         return source, tip, manifest
 
-    def prompt_optional_components(self, manifest: Manifest) -> None:
-        comp_arr = manifest.disabled_components
-        if not comp_arr:
-            return
-
-        print(format_msg(PROMPT_COLOUR, True, "Components to enable?"))
-        max_idx_w = len(str(len(comp_arr)))
-        for i, comp in enumerate(comp_arr):
-            print(format_msg(PROMPT_COLOUR, True, f"  {i + 1:<{max_idx_w}}\t{comp}"))
-        print(format_msg(PROMPT_COLOUR, True, "[A]ll or (1 2 3, 1-3, ^4)"))
-
-        def _valid_v(v: str) -> int:
-            try:
-                i_v = int(v, base=10) - 1  # -1 to translate to 0 index
-            except ValueError:
-                raise ValueError(f'Given value "{v}" must be an integer.')
-            if i_v < 0 or i_v >= len(comp_arr):
-                raise ValueError(f'Given value "{v}" must be between 1 and {len(comp_arr)} inclusive.')
-            return i_v
-
-        def _parse(ans: str) -> list[str] | None:
-            if ans in ("a", "all"):
-                return list(manifest.components)
-            if not ans:
-                return None
-
-            enabled: list[str] = []
-            for tok in ans.split():
-                fr, sep, to = tok.partition("-")
-                if sep:
-                    fr = _valid_v(fr)
-                    to = _valid_v(to)
-                    if fr > to:
-                        raise ValueError(f'Given range "{tok}" must be lo-hi.')
-                    enabled += comp_arr[fr : to + 1]
-                elif tok.startswith("^"):
-                    t = _valid_v(tok[1:])
-                    enabled += comp_arr[:t] + comp_arr[t + 1 :]
-                else:
-                    t = _valid_v(tok)
-                    enabled.append(comp_arr[t])
-            return list(set(enabled))
-
-        while True:
-            ans = prompt("", end="").lower().strip()
-            try:
-                enabled = _parse(ans)
-            except ValueError as e:
-                warn(f"invalid input. {e} Please try again.")
-                continue
-
-            if enabled is not None:
-                manifest.resolve_components(enable=enabled)
-            return
-
-    def deploy_configs(self, source: DotsSource, manifest: Manifest) -> None:
+    def deploy_configs(self, source: DotsSource, manifest: Manifest) -> dict[str, str]:
         print()
         log("Installing configs...")
         deployer = Deployer()
         for entry in manifest.enabled_entries():
-            src = source.working_path(expand(entry.src))
+            src = source.working_path(entry.expanded_src())
             if not src.exists():
                 warn(f"missing in source, skipping: {entry.src}")
                 continue
 
-            dests = expand_dests(entry.dest)
+            dests = entry.expanded_dests()
             if not dests:
                 warn(f"dest glob matched nothing, skipping: {entry.dest}")
                 continue
@@ -194,7 +171,11 @@ class Command:
                 deployer.place(src, Path(dest))
                 info(f"{entry.src} -> {dest}")
 
-    def install_packages(self, source: DotsSource, manifest: Manifest) -> tuple[str, list[str], dict[str, list[str]]]:
+        return deployer.deployed_files
+
+    def install_packages(
+        self, source: DotsSource, manifest: Manifest
+    ) -> tuple[PackageInstaller, list[str], dict[str, list[str]]]:
         installer = PackageInstaller.get(self.args.aur_helper, self.args.noconfirm)
 
         packages = manifest.enabled_packages()
@@ -208,30 +189,71 @@ class Command:
         if local_dirs:
             print()
             log("Building local packages...")
-            for path in local_dirs:
-                directory = source.working_path(path)
-                if not directory.is_dir():
-                    warn(f"missing in repo, skipping: {path}")
-                    continue
+            local_packages = build_local_packages(installer, source, local_dirs)
 
-                log(f"Building {path}...")
-                local_packages[path] = installer.build_install(directory)
+        return installer, packages, local_packages
 
-        return getattr(installer, "helper", DEFAULT_AUR_HELPER), packages, local_packages
+    def dereference_legacy(self, legacy_dir: Path | None) -> None:
+        """Replace legacy symlinks with real copies of their targets."""
 
-    def run_hooks(self, manifest: Manifest) -> None:
-        hooks = manifest.enabled_hooks("post_install")
-        if not hooks:
+        symlinks = legacy_symlinks(legacy_dir)
+        if not symlinks:
             return
 
         print()
-        log("Running post-install hooks...")
-        env = {**os.environ, "CAELESTIA_DOTS": str(dots_dir)}
-        for hook in hooks:
-            info(f"Running hook: {hook}")
-            result = subprocess.run(hook, shell=True, env=env)
-            if result.returncode != 0:
-                warn(f"hook exited with {result.returncode}")
+        log("Preserving content from legacy symlinks...")
+        for path in symlinks:
+            target = path.resolve()
+            if not target.exists():
+                continue
+
+            try:
+                _deref_symlink(path, target)
+                info(f"Copied {target} -> {path}")
+            except OSError as e:
+                warn(f"failed to preserve {path}: {e}")
+
+    def deref_backup_syms(self, legacy_dir: Path | None) -> None:
+        """Deref the backup's legacy symlinks before the repo is cleared, so the backup keeps real content."""
+
+        if not config_backup_dir.is_dir():
+            return
+
+        for link in legacy_config_symlinks(config_backup_dir, legacy_dir):
+            target = link.resolve()
+            if not target.exists():
+                continue
+
+            try:
+                _deref_symlink(link, target)
+            except OSError as e:
+                warn(f"failed to preserve {link} in backup: {e}")
+
+    def migrate_legacy(self, installer: PackageInstaller, legacy_dir: Path | None) -> None:
+        """Clean up a previous install.fish setup (repo, symlinks and metapackage)."""
+
+        to_delete = legacy_to_delete(legacy_dir)
+        meta_installed = installer.is_installed(LEGACY_META_PKG)
+        if not to_delete and not meta_installed:
+            return
+
+        print()
+        log("Found a legacy Caelestia installation...")
+        if not confirm("Clear legacy installation?"):
+            return
+
+        deployer = Deployer()
+        try:
+            self.deref_backup_syms(legacy_dir)
+            for path in to_delete:
+                deployer.remove(path)
+                info(f"Deleted {path}")
+
+            if meta_installed:
+                log("Removing legacy meta package...")
+                installer.remove([LEGACY_META_PKG])
+        except (OSError, PackageError) as e:
+            warn(f"could not fully clear the legacy installation: {e}")
 
     def print_done(self) -> None:
         print()

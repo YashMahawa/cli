@@ -7,6 +7,8 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+from caelestia.utils.io import warn
+
 _XDG_DEFAULTS = {
     "XDG_CONFIG_HOME": str(Path.home() / ".config"),
     "XDG_DATA_HOME": str(Path.home() / ".local/share"),
@@ -25,35 +27,40 @@ class ComponentError(Exception):
     """Raised when component flags are invalid or contradictory."""
 
 
-def expand(text: str) -> Path:
+def _expand(text: str) -> Path:
     """Expand $VAR/${VAR} env vars (with XDG defaults) and ~ in a path."""
 
     env = {**_XDG_DEFAULTS, **os.environ}
     return Path(Template(text).safe_substitute(env)).expanduser()
 
 
-def expand_dests(dest: str) -> list[Path]:
-    """Expand globs within a dest path.
-
-    Globs from the start until the segment with the last glob so subdirs are
-    created if they didn't exist previously.
-    """
-
-    expanded = expand(dest)
-    if not _GLOB_MAGIC.search(str(expanded)):
-        return [expanded]
-
-    parts = expanded.parts
-    glob_idx = max(i for i, part in enumerate(parts) if _GLOB_MAGIC.search(part))
-    pattern = str(Path(*parts[: glob_idx + 1]))
-    tail = parts[glob_idx + 1 :]
-    return [Path(match, *tail) for match in sorted(glob.glob(pattern))]
-
-
 @dataclass(frozen=True)
 class ManifestEntry:
     src: str
     dest: str
+
+    def expanded_src(self) -> Path:
+        return _expand(self.src)
+
+    def expanded_dests(self) -> list[Path]:
+        """The dest path with globs expanded.
+
+        Globs from the start until the segment with the last glob so subdirs are
+        created if they didn't exist previously.
+        """
+
+        expanded = _expand(self.dest)
+        if not _GLOB_MAGIC.search(str(expanded)):
+            return [expanded]
+
+        parts = expanded.parts
+        glob_idx = max(i for i, part in enumerate(parts) if _GLOB_MAGIC.search(part))
+        pattern = str(Path(*parts[: glob_idx + 1]))
+        tail = parts[glob_idx + 1 :]
+        matches = sorted(glob.glob(pattern))
+        if tail:  # Only match dirs if a tail exists
+            matches = [match for match in matches if Path(match).is_dir()]
+        return [Path(match, *tail) for match in matches]
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,7 @@ class ManifestComponent:
     default: bool = False
     packages: list[str] = field(default_factory=list)
     entries: list[ManifestEntry] = field(default_factory=list)
+    post_package: list[str] = field(default_factory=list)
     post_install: list[str] = field(default_factory=list)
     post_update: list[str] = field(default_factory=list)
 
@@ -76,8 +84,9 @@ class _ManifestData:
 class Manifest:
     components: dict[str, ManifestComponent] = field(default_factory=dict)
     packages: list[str] = field(default_factory=list)
-    post_install: list[str] = field(default_factory=list)
-    post_update: list[str] = field(default_factory=list)
+    post_package: list[str] = field(default_factory=list)  # Post package install (install cmd only)
+    post_install: list[str] = field(default_factory=list)  # Very end of install cmd
+    post_update: list[str] = field(default_factory=list)  # Very end of update cmd
     _data: _ManifestData = field(default_factory=_ManifestData, init=False, repr=False)
 
     @property
@@ -95,6 +104,7 @@ class Manifest:
         except tomllib.TOMLDecodeError as e:
             raise ManifestError(f"invalid TOML: {e}") from e
 
+        post_package = _validate_str_list(raw.get("post_package", []), "post_package")
         post_install = _validate_str_list(raw.get("post_install", []), "post_install")
         post_update = _validate_str_list(raw.get("post_update", []), "post_update")
 
@@ -103,11 +113,14 @@ class Manifest:
         components = {}
         for comp in raw.get("components", []):
             parsed = _parse_component(comp)
+            if parsed.name in components:
+                warn(f"duplicate component '{parsed.name}'; using the last definition")
             components[parsed.name] = parsed
 
         return Manifest(
             components=components,
             packages=packages,
+            post_package=post_package,
             post_install=post_install,
             post_update=post_update,
         )
@@ -212,6 +225,7 @@ def _parse_component(d: dict[str, Any]) -> ManifestComponent:
         default=bool(d.get("default", False)),
         packages=_validate_str_list(d.get("packages", []), f"component '{name}' packages"),
         entries=[_parse_entry(e) for e in d.get("entries", [])],
+        post_package=_validate_str_list(d.get("post_package", []), f"component '{name}' post_package"),
         post_install=_validate_str_list(d.get("post_install", []), f"component '{name}' post_install"),
         post_update=_validate_str_list(d.get("post_update", []), f"component '{name}' post_update"),
     )
