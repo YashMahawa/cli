@@ -185,15 +185,23 @@ class ArchInstaller(PackageInstaller):
 
         # Force install reason to explicit install
         if explicit:
+            # `-D` accepts real installed names, not virtual `provides` names.
+            resolved = [self._installed_name(pkg) for pkg in packages]
             try:
-                subprocess.run([self.helper, "-D", "--asexplicit", *self.flags, *packages], check=True)
+                subprocess.run([self.helper, "-D", "--asexplicit", *self.flags, *resolved], check=True)
             except (subprocess.CalledProcessError, FileNotFoundError):
-                warn(f"failed to mark packages as explicitly installed: {', '.join(packages)}")
+                warn(f"failed to mark packages as explicitly installed: {', '.join(resolved)}")
 
     def remove(self, packages: list[str]) -> None:
         if not packages:
             return
-        _try_run([self.helper, "-Rns", *self.flags, *packages], f"failed to remove packages: {', '.join(packages)}")
+        installed = [pkg for pkg in packages if self.is_installed(pkg)]
+        if skipped := [pkg for pkg in packages if pkg not in installed]:
+            info(f"Already removed, skipping: {', '.join(skipped)}")
+        if not installed:
+            return
+
+        _try_run([self.helper, "-Rns", *self.flags, *installed], f"failed to remove packages: {', '.join(installed)}")
 
     def build_install(self, directory: Path) -> list[str]:
         fields = _read_srcinfo(directory)
@@ -218,7 +226,8 @@ class ArchInstaller(PackageInstaller):
 
         return names
 
-    def installed_version(self, package: str) -> str | None:
+    def _query(self, package: str) -> tuple[str, str] | None:
+        """Return installed name and version, resolving virtual package provides."""
         result = subprocess.run(
             ["pacman", "-Q", package],
             stdout=subprocess.PIPE,
@@ -227,9 +236,17 @@ class ArchInstaller(PackageInstaller):
         )
         if result.returncode != 0:
             return None
-        # `pacman -Q` prints "<name> <version>"
+        # `pacman -Q` resolves provides and prints "<real name> <version>".
         parts = result.stdout.split()
-        return parts[1] if len(parts) >= 2 else None
+        return (parts[0], parts[1]) if len(parts) >= 2 else None
+
+    def _installed_name(self, package: str) -> str:
+        query = self._query(package)
+        return query[0] if query else package
+
+    def installed_version(self, package: str) -> str | None:
+        query = self._query(package)
+        return query[1] if query else None
 
     def needs_rebuild(self, directory: Path, packages: list[str]) -> bool:
         built = _srcinfo_version(_read_srcinfo(directory))
