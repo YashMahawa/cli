@@ -35,7 +35,10 @@ class Command:
 
     def fullscreen(self) -> None:
         cmd = ["grim"]
-        focused_monitor = next(monitor for monitor in hypr.message("monitors") if monitor["focused"])
+        monitors = hypr.message("monitors")
+        focused_monitor = next((monitor for monitor in monitors if monitor.get("focused")), None)
+        if focused_monitor is None and monitors:
+            focused_monitor = monitors[0]
         if focused_monitor:
             cmd += ["-o", focused_monitor["name"]]
         cmd += ["-"]

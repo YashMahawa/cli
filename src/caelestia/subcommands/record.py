@@ -57,9 +57,13 @@ class Command:
                     max_rr = max(max_rr, rr)
             args += ["-f", str(max_rr)]
         else:
-            focused_monitor = next(monitor for monitor in monitors if monitor["focused"])
-            if focused_monitor:
-                args += [focused_monitor["name"], "-f", str(round(focused_monitor["refreshRate"]))]
+            focused_monitor = next((monitor for monitor in monitors if monitor.get("focused")), None)
+            if focused_monitor is None and monitors:
+                focused_monitor = monitors[0]
+            if focused_monitor is None:
+                notify("Recording failed", "No active monitor is available to record")
+                return
+            args += [focused_monitor["name"], "-f", str(round(focused_monitor["refreshRate"]))]
 
         if self.args.sound:
             args += ["-a", "default_output"]

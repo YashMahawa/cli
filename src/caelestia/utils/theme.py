@@ -2,6 +2,7 @@ import fcntl
 import json
 import os
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -136,15 +137,24 @@ def apply_terms(sequences: str) -> None:
     for pt in pts_path.iterdir():
         if pt.name.isdigit():
             try:
-                # Use non-blocking write with timeout to prevent hangs
-                import os
-
                 fd = os.open(str(pt), os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
                 try:
-                    os.write(fd, sequences.encode())
+                    pending = memoryview(sequences.encode())
+                    deadline = time.monotonic() + 0.05
+                    while pending:
+                        try:
+                            written = os.write(fd, pending)
+                            if written <= 0:
+                                break
+                            pending = pending[written:]
+                        except BlockingIOError:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
+                            select.select([], [fd], [], remaining)
                 finally:
                     os.close(fd)
-            except (PermissionError, OSError, BlockingIOError):
+            except (PermissionError, OSError):
                 # Skip terminals that are busy, closed, or inaccessible
                 pass
 
@@ -162,7 +172,9 @@ def apply_discord(scss: str) -> None:
         conf = subprocess.check_output(["sass", "-I", tmp_dir, templates_dir / "discord.scss"], text=True)
 
     for client in "Equicord", "Vencord", "BetterDiscord", "equibop", "vesktop", "legcord":
-        atomic_write(config_dir / client / "themes/caelestia.theme.css", conf)
+        client_dir = config_dir / client
+        if client_dir.exists():
+            atomic_write(client_dir / "themes/caelestia.theme.css", conf)
 
 
 @log_exception
@@ -248,15 +260,16 @@ def sync_papirus_colors(hex_color: str) -> None:
     else:
         color = _determine_hue_color(r, g, b, brightness, False)
 
-    try:
+    # Runtime theming must never request administrative privileges. Only update
+    # a user-owned Papirus installation; system-wide themes remain untouched.
+    user_papirus = [Path.home() / ".local/share/icons/Papirus", Path.home() / ".icons/Papirus"]
+    if any(path.exists() for path in user_papirus):
         subprocess.Popen(
-            ["sudo", "-n", "papirus-folders", "-C", color, "-u"],
+            ["papirus-folders", "-C", color, "-u"],
             stderr=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             start_new_session=True,
         )
-    except Exception:
-        pass
 
 
 def _determine_hue_color(r: int, g: int, b: int, brightness: int, use_pale: bool) -> str:
@@ -361,19 +374,13 @@ def apply_chromium(colours: dict[str, str]) -> None:
     for cmd, policy_dir in browsers:
         if shutil.which(cmd) is None:
             continue
-        if not policy_dir.is_dir():
-            subprocess.run(["sudo", "-n", "mkdir", "-p", str(policy_dir)], stderr=subprocess.DEVNULL)
-        if not policy_dir.is_dir():
-            print(f"Unable to create {policy_dir} directory")
+        policy_file = policy_dir / "caelestia.json"
+        if not policy_dir.is_dir() or not os.access(policy_dir, os.W_OK):
             continue
 
-        # Use tee instead of atomic_write cause we need sudo
-        subprocess.run(
-            ["sudo", "-n", "tee", str(policy_dir / "caelestia.json")],
-            input=json.dumps({"BrowserThemeColor": theme_color, "BrowserColorScheme": "device"}),
-            text=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        atomic_write(
+            policy_file,
+            json.dumps({"BrowserThemeColor": theme_color, "BrowserColorScheme": "device"}),
         )
         subprocess.run(
             [cmd, "--refresh-platform-policy", "--no-startup-window"],
