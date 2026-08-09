@@ -36,11 +36,11 @@ class Command:
     def fullscreen(self) -> None:
         cmd = ["grim"]
         monitors = hypr.message("monitors")
-        focused_monitor = next((monitor for monitor in monitors if monitor.get("focused")), None)
-        if focused_monitor is None and monitors:
-            focused_monitor = monitors[0]
-        if focused_monitor:
-            cmd += ["-o", focused_monitor["name"]]
+        focused_monitor = hypr.focused_monitor(monitors)
+        if focused_monitor is None:
+            notify("Screenshot failed", "No focused monitor is available to capture")
+            return
+        cmd += ["-o", focused_monitor["name"]]
         cmd += ["-"]
         sc_data = subprocess.check_output(cmd)
 

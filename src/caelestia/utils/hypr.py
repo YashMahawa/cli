@@ -28,6 +28,16 @@ def message(msg: str, is_json: bool = True) -> str | dict[str, Any]:
         return json.loads(resp) if is_json else resp
 
 
+def focused_monitor(monitors: object) -> dict[str, Any] | None:
+    """Return the explicitly focused monitor from a Hyprland response."""
+    if not isinstance(monitors, list):
+        return None
+    return next(
+        (monitor for monitor in monitors if isinstance(monitor, dict) and monitor.get("focused")),
+        None,
+    )
+
+
 def is_lua_config() -> bool:
     global _lua_config_cache
     if _lua_config_cache is not None:
