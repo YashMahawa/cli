@@ -12,6 +12,7 @@ from caelestia.utils.paths import get_config, recording_notif_path, recording_pa
 
 RECORDER = "gpu-screen-recorder"
 QUALITY_DEFAULTS = (
+    ("-k", "hevc"),
     ("-encoder", "gpu"),
     ("-fallback-cpu-encoding", "yes"),
     ("-q", "ultra"),

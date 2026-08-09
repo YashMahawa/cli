@@ -2,9 +2,9 @@ from caelestia.subcommands.record import monitor_refresh_rate, quality_args
 
 
 def test_quality_defaults_are_added() -> None:
-    args = quality_args(["-k", "h264"])
+    args = quality_args([])
 
-    assert args[:2] == ["-k", "h264"]
+    assert args[args.index("-k") + 1] == "hevc"
     assert args[args.index("-q") + 1] == "ultra"
     assert args[args.index("-tune") + 1] == "quality"
     assert args[args.index("-fm") + 1] == "cfr"
@@ -12,8 +12,10 @@ def test_quality_defaults_are_added() -> None:
 
 
 def test_explicit_quality_choices_win() -> None:
-    args = quality_args(["-q", "high", "-fm", "vfr", "-tune", "performance"])
+    args = quality_args(["-k", "av1", "-q", "high", "-fm", "vfr", "-tune", "performance"])
 
+    assert args.count("-k") == 1
+    assert args[args.index("-k") + 1] == "av1"
     assert args.count("-q") == 1
     assert args[args.index("-q") + 1] == "high"
     assert args[args.index("-fm") + 1] == "vfr"
