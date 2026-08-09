@@ -11,6 +11,31 @@ from caelestia.utils.notify import close_notification, notify
 from caelestia.utils.paths import get_config, recording_notif_path, recording_path, recordings_dir
 
 RECORDER = "gpu-screen-recorder"
+QUALITY_DEFAULTS = (
+    ("-encoder", "gpu"),
+    ("-fallback-cpu-encoding", "yes"),
+    ("-q", "ultra"),
+    ("-tune", "quality"),
+    ("-fm", "cfr"),
+)
+
+
+def quality_args(extra_args: object) -> list[str]:
+    """Add quality-first defaults while preserving explicit user choices."""
+    args = [str(value) for value in extra_args] if isinstance(extra_args, list) else []
+    for option, value in QUALITY_DEFAULTS:
+        if option not in args:
+            args.extend((option, value))
+    return args
+
+
+def monitor_refresh_rate(monitor: object, fallback: int = 60) -> int:
+    if not isinstance(monitor, dict):
+        return fallback
+    try:
+        return max(1, round(float(monitor.get("refreshRate", fallback))))
+    except (TypeError, ValueError):
+        return fallback
 
 
 class Command:
@@ -50,10 +75,12 @@ class Command:
 
             w, h, x, y = map(int, m.groups())
             r = x, y, w, h
-            max_rr = 0
-            for monitor in monitors:
-                if self.intersects((monitor["x"], monitor["y"], monitor["width"], monitor["height"]), r):
-                    rr = round(monitor["refreshRate"])
+            max_rr = 60
+            for monitor in monitors if isinstance(monitors, list) else []:
+                if isinstance(monitor, dict) and self.intersects(
+                    (monitor["x"], monitor["y"], monitor["width"], monitor["height"]), r
+                ):
+                    rr = monitor_refresh_rate(monitor)
                     max_rr = max(max_rr, rr)
             args += ["-f", str(max_rr)]
         else:
@@ -61,15 +88,15 @@ class Command:
             if focused_monitor is None:
                 notify("Recording failed", "No focused monitor is available to record")
                 return
-            args += [focused_monitor["name"], "-f", str(round(focused_monitor["refreshRate"]))]
+            args += [focused_monitor["name"], "-f", str(monitor_refresh_rate(focused_monitor))]
 
         if self.args.sound:
             args += ["-a", "default_output"]
 
         config = get_config()
         try:
-            if "record" in config and "extraArgs" in config["record"]:
-                args += config["record"]["extraArgs"]
+            extra_args = config.get("record", {}).get("extraArgs", [])
+            args += quality_args(extra_args)
         except TypeError as e:
             raise ValueError(f"Config option 'record.extraArgs' should be an array: {e}")
 
