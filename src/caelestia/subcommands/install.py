@@ -1,4 +1,5 @@
 import shutil
+import stat
 import textwrap
 from argparse import Namespace
 from pathlib import Path
@@ -29,13 +30,28 @@ def _parse_list_arg(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _ignore_transient_nodes(directory: str, names: list[str]) -> set[str]:
+    """Skip sockets/FIFOs that cannot be copied and are recreated by their owner."""
+
+    ignored: set[str] = set()
+    parent = Path(directory)
+    for name in names:
+        try:
+            mode = (parent / name).lstat().st_mode
+        except OSError:
+            continue
+        if stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode):
+            ignored.add(name)
+    return ignored
+
+
 def _deref_symlink(link: Path, target: Path) -> None:
     """Replace symlink `link` with a real copy of `target`'s content."""
 
     bak = link.rename(link.parent / f"{link.name}.bak")
     try:
         if target.is_dir():
-            shutil.copytree(target, link, symlinks=True)
+            shutil.copytree(target, link, symlinks=True, ignore=_ignore_transient_nodes)
         else:
             shutil.copy2(target, link)
     except OSError:
@@ -119,7 +135,12 @@ class Command:
                 log("Deleting old backup...")
                 shutil.rmtree(config_backup_dir)
 
-            shutil.copytree(config_dir, config_backup_dir, symlinks=True)
+            shutil.copytree(
+                config_dir,
+                config_backup_dir,
+                symlinks=True,
+                ignore=_ignore_transient_nodes,
+            )
             info(f"Created backup at {config_backup_dir}")
 
     def fetch_manifest(self) -> tuple[DotsSource, str, Manifest]:
