@@ -1,5 +1,7 @@
 import unittest
+from argparse import Namespace
 from caelestia.subcommands.resizer import WindowRule, _parse_match_arg
+from caelestia.subcommands.resizer import Command
 
 class TestWindowRule(unittest.TestCase):
     def test_legacy_exact(self):
@@ -50,6 +52,18 @@ class TestWindowRule(unittest.TestCase):
         self.assertEqual(_parse_match_arg("class=Gimp"), ("class", "exact", "Gimp"))
         self.assertEqual(_parse_match_arg("title:regex=^Foo.*"), ("title", "regex", "^Foo.*"))
         self.assertEqual(_parse_match_arg("title:contains=Bar"), ("title", "contains", "Bar"))
+
+    def test_default_popup_rules_follow_current_title(self):
+        command = Command(Namespace(daemon=False))
+        signin = next(rule for rule in command.window_rules if rule.name == "(?i)Sign In")
+        self.assertEqual(signin.match_type, "titleRegex")
+        self.assertTrue(signin.evaluate({"title": "Account Sign In", "initialTitle": "Loading"}))
+
+    def test_close_event_clears_applied_rule_cache(self):
+        command = Command(Namespace(daemon=False))
+        command.applied_rules["abc123"] = "rule"
+        command._handle_window_event("closewindow>>abc123")
+        self.assertNotIn("abc123", command.applied_rules)
         
 if __name__ == '__main__':
     unittest.main()

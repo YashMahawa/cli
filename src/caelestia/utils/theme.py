@@ -169,7 +169,11 @@ def apply_hypr(conf: str) -> None:
 def apply_discord(scss: str) -> None:
     with tempfile.TemporaryDirectory("w") as tmp_dir:
         (Path(tmp_dir) / "_colours.scss").write_text(scss)
-        conf = subprocess.check_output(["sass", "-I", tmp_dir, templates_dir / "discord.scss"], text=True)
+        conf = subprocess.check_output(
+            ["sass", "-I", tmp_dir, templates_dir / "discord.scss"],
+            text=True,
+            timeout=30,
+        )
 
     for client in "Equicord", "Vencord", "BetterDiscord", "equibop", "vesktop", "legcord":
         client_dir = config_dir / client
@@ -490,6 +494,7 @@ def _low_priority_tasks(colours: dict[str, str], mode: str, cfg: dict, scheme_in
                         "SCHEME_COLOURS": scheme_info["colours"],
                     },
                     stderr=subprocess.DEVNULL,
+                    timeout=30,
                 )
             futures.append(pool.submit(run_hook))
             
@@ -505,13 +510,49 @@ def _low_priority_tasks(colours: dict[str, str], mode: str, cfg: dict, scheme_in
 
 def _worker_process(data: dict) -> None:
     os.setpgrp()
+    # A broken template tool or user hook must not pin a theme worker forever.
+    signal.alarm(90)
     colours = data["colours"]
     mode = data["mode"]
     cfg = data["cfg"]
     scheme_info = data["scheme_info"]
 
-    _high_priority_tasks(colours, mode, cfg)
-    _low_priority_tasks(colours, mode, cfg, scheme_info)
+    try:
+        _high_priority_tasks(colours, mode, cfg)
+        _low_priority_tasks(colours, mode, cfg, scheme_info)
+    finally:
+        signal.alarm(0)
+
+
+def _stop_worker(worker_proc: multiprocessing.Process, timeout: float = 0.8) -> None:
+    """Bounded replacement of a stale worker and its subprocess group."""
+    if not worker_proc.is_alive():
+        worker_proc.join(timeout=0)
+        return
+    if worker_proc.pid:
+        try:
+            os.killpg(worker_proc.pid, signal.SIGTERM)
+        except OSError:
+            pass
+    worker_proc.join(timeout)
+    if worker_proc.is_alive() and worker_proc.pid:
+        try:
+            os.killpg(worker_proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        worker_proc.join(0.25)
+
+
+def _theme_daemon_running() -> bool:
+    lock_file = c_state_dir / "theme_worker.lock"
+    c_state_dir.mkdir(parents=True, exist_ok=True)
+    with open(lock_file, "a+", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    return False
 
 
 def _theme_daemon() -> None:
@@ -526,6 +567,7 @@ def _theme_daemon() -> None:
     queue_file = c_state_dir / "theme_queue.json"
     last_req_id = None
     worker_proc = None
+    worker_started = 0.0
     idle_time = 0.0
 
     while True:
@@ -541,12 +583,7 @@ def _theme_daemon() -> None:
 
         if req_id and req_id != last_req_id:
             if worker_proc is not None and worker_proc.is_alive():
-                if worker_proc.pid:
-                    try:
-                        os.killpg(worker_proc.pid, signal.SIGTERM)
-                    except OSError:
-                        pass
-                worker_proc.join()
+                _stop_worker(worker_proc)
 
             last_req_id = req_id
             idle_time = 0.0
@@ -556,13 +593,17 @@ def _theme_daemon() -> None:
                 args=(data,)
             )
             worker_proc.start()
+            worker_started = time.monotonic()
+
+        if worker_proc is not None and worker_proc.is_alive() and time.monotonic() - worker_started > 95:
+            _stop_worker(worker_proc)
 
         if worker_proc is None or not worker_proc.is_alive():
-            idle_time += 0.1
+            idle_time += 0.4
             if idle_time > 5.0:
                 break
 
-        time.sleep(0.1)
+        time.sleep(0.05 if worker_proc is not None and worker_proc.is_alive() else 0.4)
 
 
 def apply_colours(colours: dict[str, str], mode: str, sync: bool = False) -> None:
@@ -590,12 +631,25 @@ def apply_colours(colours: dict[str, str], mode: str, sync: bool = False) -> Non
     queue_file = c_state_dir / "theme_queue.json"
     atomic_write(queue_file, json.dumps(request))
 
+    if _theme_daemon_running():
+        return
+
     log_file = c_state_dir / "theme_daemon.log"
     log_fd = open(log_file, "a")
-
-    subprocess.Popen(
-        [sys.executable, "-c", "from caelestia.utils.theme import _theme_daemon; _theme_daemon()"],
-        stdout=log_fd,
-        stderr=log_fd,
-        start_new_session=True
-    )
+    command = [sys.executable, "-c", "from caelestia.utils.theme import _theme_daemon; _theme_daemon()"]
+    try:
+        launched = subprocess.run(
+            ["systemd-run", "--user", "--collect", "--quiet",
+             "--unit=caelestia-theme-daemon", *command],
+            stdout=log_fd,
+            stderr=log_fd,
+            check=False,
+            timeout=3,
+        )
+        if launched.returncode == 0:
+            return
+        subprocess.Popen(
+            command, stdout=log_fd, stderr=log_fd, start_new_session=True
+        )
+    finally:
+        log_fd.close()

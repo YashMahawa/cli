@@ -96,6 +96,7 @@ class Command:
     def __init__(self, args: Namespace) -> None:
         self.args = args
         self.timeout_tracker: dict[str, float] = {}
+        self.applied_rules: dict[str, str] = {}
         
         self.enable_fallback_heuristic = False
         self.window_rules = self._load_window_rules()
@@ -122,12 +123,12 @@ class Command:
 
     def _load_window_rules(self) -> list[WindowRule]:
         default_rules = [
-            WindowRule("(Bitwarden", "initialTitleContains", "20%", "54%", ["float", "center"]),
-            WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "initialTitleRegex", "", "", ["pip"]),
-            WindowRule("(?i)Sign In", "initialTitleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)Verification", "initialTitleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)Splash", "initialTitleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)^(?!.*The Updater).*Updater.*$", "initialTitleRegex", "", "", ["float", "center"]),
+            WindowRule("(Bitwarden", "titleContains", "20%", "54%", ["float", "center"]),
+            WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "titleRegex", "", "", ["pip"]),
+            WindowRule("(?i)Sign In", "titleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)Verification", "titleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)Splash", "titleRegex", "", "", ["float", "center"]),
+            WindowRule("(?i)^(?!.*The Updater).*Updater.*$", "titleRegex", "", "", ["float", "center"]),
         ]
 
         config = get_config()
@@ -314,11 +315,47 @@ class Command:
                 return rule
         return None
 
+    def _apply_matching_rule(self, window_id: str, window_info: dict) -> bool:
+        rule = self._match_window_rule(window_info)
+        if not rule:
+            return False
+        signature = f"{rule.name}|{rule.match_type}|{rule.width}|{rule.height}|{','.join(rule.actions)}"
+        if self.applied_rules.get(window_id) == signature:
+            return True
+        if self._is_rate_limited(f"{window_id}:{signature}"):
+            return True
+        info(f"Matched rule '{rule.name}' for window 0x{window_id}")
+        if self._apply_window_actions(window_id, rule.width, rule.height, rule.actions):
+            self.applied_rules[window_id] = signature
+        return True
+
+    def _apply_protocol_popup(self, window_id: str, window_info: dict) -> bool:
+        """Use compositor protocol metadata, independent of title language."""
+        modal_state = window_info.get("modal", False)
+        parent_addr = window_info.get("parent", "")
+        xdg_parent = window_info.get("xdg_toplevel_parent", "")
+        has_parent = bool(parent_addr) and parent_addr not in ("0x0", "", "0")
+        has_xdg_parent = bool(xdg_parent) and xdg_parent not in ("0x0", "", "0")
+        if not (modal_state or has_parent or has_xdg_parent):
+            return False
+        signature = "protocol-popup"
+        if self.applied_rules.get(window_id) == signature:
+            return True
+        if self._is_rate_limited(f"{window_id}:{signature}"):
+            return True
+        info(f"Protocol popup detected for 0x{window_id}; floating automatically")
+        if self._apply_window_actions(window_id, "", "", ["float", "center"]):
+            self.applied_rules[window_id] = signature
+        return True
+
     def _handle_window_event(self, event: str) -> None:
         if event.startswith("windowtitle"):
             self._handle_title_event(event)
         elif event.startswith("openwindow"):
             self._handle_open_event(event)
+        elif event.startswith("closewindow"):
+            window_id = event.split(">>", 1)[-1].lstrip(">").split(",", 1)[0]
+            self.applied_rules.pop(window_id, None)
 
     def _handle_title_event(self, event: str) -> None:
         try:
@@ -346,14 +383,9 @@ class Command:
 
             log(f"Window 0x{window_id} - Title: '{window_title}' | Initial: '{initial_title}'")
 
-            rule = self._match_window_rule(window_info)
-            if rule:
-                if self._is_rate_limited(window_id):
-                    log(f"Rate limited: skipping window 0x{window_id}")
-                    return
-
-                info(f"Matched rule '{rule.name}' for window 0x{window_id}")
-                self._apply_window_actions(window_id, rule.width, rule.height, rule.actions)
+            if self._apply_matching_rule(window_id, window_info):
+                return
+            self._apply_protocol_popup(window_id, window_info)
 
         except (IndexError, ValueError) as e:
             warn(f"failed to parse window title event: {e}")
@@ -388,29 +420,11 @@ class Command:
                     "workspace": {"name": workspace}
                 }
 
-            rule = self._match_window_rule(window_info)
-            if rule:
-                if self._is_rate_limited(window_id):
-                    log(f"Rate limited: skipping window 0x{window_id}")
-                    return
-
-                info(f"Matched rule '{rule.name}' for new window 0x{window_id}")
-                self._apply_window_actions(window_id, rule.width, rule.height, rule.actions)
+            if self._apply_matching_rule(window_id, window_info):
                 return
 
             if window_info:
-                modal_state = window_info.get("modal", False)
-                parent_addr = window_info.get("parent", "")
-                xdg_parent = window_info.get("xdg_toplevel_parent", "")
-                
-                has_parent = bool(parent_addr) and parent_addr not in ("0x0", "", "0")
-                has_xdg_parent = bool(xdg_parent) and xdg_parent not in ("0x0", "", "0")
-
-                if modal_state or has_parent or has_xdg_parent:
-                    if self._is_rate_limited(window_id):
-                        return
-                    info(f"Protocol signal detected (modal/parent) for 0x{window_id}. Floating automatically.")
-                    self._apply_window_actions(window_id, "", "", ["float", "center"])
+                if self._apply_protocol_popup(window_id, window_info):
                     return
 
                 size = window_info.get("size", [0, 0])
