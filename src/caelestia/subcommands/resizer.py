@@ -129,6 +129,10 @@ class WindowRule:
                 except (ValueError, TypeError):
                     return False
 
+                if actual_prop in ("initialWidth", "initialHeight", "width", "height", "initial_width", "initial_height"):
+                    if num_win <= 0:
+                        return False
+
                 if actual_pred in ("less_than", "lt", "<"):
                     if not (num_win < num_val):
                         return False
@@ -205,9 +209,6 @@ class Command:
         return "dispatch centerwindow"
 
     def _record_initial_props(self, window_id: str, window_info: dict, fallback_title: str = "", fallback_class: str = "") -> None:
-        if window_id in self.window_initial_props:
-            return
-
         initial_title = window_info.get("initialTitle") or window_info.get("title") or fallback_title
         initial_class = window_info.get("initialClass") or window_info.get("class") or fallback_class
         size = window_info.get("size")
@@ -216,6 +217,22 @@ class Command:
 
         w = size[0] if isinstance(size[0], (int, float)) else 0
         h = size[1] if isinstance(size[1], (int, float)) else 0
+
+        if window_id in self.window_initial_props:
+            stored = self.window_initial_props[window_id]
+            stored_w = stored.get("initialWidth", 0)
+            stored_h = stored.get("initialHeight", 0)
+
+            if (stored_w <= 0 or stored_h <= 0) and (w > 0 and h > 0):
+                stored["initialSize"] = [w, h]
+                stored["initialWidth"] = w
+                stored["initialHeight"] = h
+
+            if initial_title and (not stored.get("initialTitle") or stored.get("initialTitle") == fallback_title):
+                stored["initialTitle"] = initial_title
+            if initial_class and (not stored.get("initialClass") or stored.get("initialClass") == fallback_class):
+                stored["initialClass"] = initial_class
+            return
 
         self.window_initial_props[window_id] = {
             "initialTitle": initial_title,
@@ -326,16 +343,26 @@ class Command:
         self.timeout_tracker[key] = current_time
         return False
 
-    def _get_window_info(self, window_id: str) -> Optional[Dict[str, Any]]:
-        try:
-            clients = hypr.message("clients")
-            if isinstance(clients, list):
-                for client in clients:
-                    if isinstance(client, dict) and client.get("address") == f"0x{window_id}":
-                        self._record_initial_props(window_id, client)
-                        return self._enhance_window_info(window_id, client)
-        except Exception:
-            pass
+    def _get_window_info(self, window_id: str, retries: int = 0) -> Optional[Dict[str, Any]]:
+        attempts = 1 + max(0, retries)
+        for attempt in range(attempts):
+            try:
+                clients = hypr.message("clients")
+                if isinstance(clients, list):
+                    for client in clients:
+                        if isinstance(client, dict) and client.get("address") == f"0x{window_id}":
+                            size = client.get("size")
+                            w = size[0] if isinstance(size, (list, tuple)) and len(size) >= 1 and isinstance(size[0], (int, float)) else 0
+                            h = size[1] if isinstance(size, (list, tuple)) and len(size) >= 2 and isinstance(size[1], (int, float)) else 0
+
+                            self._record_initial_props(window_id, client)
+                            if (w > 0 and h > 0) or attempt == attempts - 1:
+                                return self._enhance_window_info(window_id, client)
+            except Exception:
+                pass
+
+            if attempt < attempts - 1:
+                time.sleep(0.02)
 
         return None
 
@@ -511,12 +538,15 @@ class Command:
         return True
 
     def _apply_unparented_popup_heuristic(self, window_id: str, window_info: dict) -> bool:
-        """Evaluate unparented browser popups against creation geometry thresholds."""
+        """Evaluate unparented popups against creation geometry thresholds requiring strong popup evidence."""
         modal_state = window_info.get("modal", False)
         parent_addr = window_info.get("parent", "")
         xdg_parent = window_info.get("xdg_toplevel_parent", "")
-        has_parent = (bool(parent_addr) and parent_addr not in ("0x0", "", "0")) or (
-            bool(xdg_parent) and xdg_parent not in ("0x0", "", "0")
+        transient_for = window_info.get("transient_for", "")
+        has_parent = (
+            (bool(parent_addr) and parent_addr not in ("0x0", "", "0"))
+            or (bool(xdg_parent) and xdg_parent not in ("0x0", "", "0"))
+            or (bool(transient_for) and transient_for not in ("0x0", "", "0"))
         )
         if modal_state or has_parent:
             return False
@@ -529,28 +559,45 @@ class Command:
         if not (isinstance(w, (int, float)) and isinstance(h, (int, float))):
             return False
 
-        is_popup_geometry = 200 <= w <= 1000 and 100 <= h <= 800 and (w / h if h > 0 else 0) >= 0.3
+        if w <= 0 or h <= 0:
+            return False
 
+        is_popup_geometry = 200 <= w <= 1000 and 100 <= h <= 800 and (w / h if h > 0 else 0) >= 0.3
         if not is_popup_geometry:
             return False
 
-        win_class = (window_info.get("class", "") or window_info.get("initialClass", "")).lower()
         title = (window_info.get("title", "") or window_info.get("initialTitle", "")).lower()
+        role = str(
+            window_info.get("role")
+            or window_info.get("windowRole")
+            or window_info.get("window_role")
+            or window_info.get("type")
+            or ""
+        ).lower()
 
-        browser_classes = ("chrome", "google-chrome", "chromium", "firefox", "zen", "brave", "edge", "opera", "vivaldi")
-        is_browser = any(b in win_class for b in browser_classes)
-        is_auth_keywords = any(kw in title for kw in ("sign in", "verification", "log in", "login", "oauth", "auth", "sso", "accounts"))
+        is_auth_keywords = any(
+            kw in title
+            for kw in ("sign in", "verification", "log in", "login", "oauth", "auth", "sso", "accounts")
+        )
+        has_popup_role = any(
+            r in role for r in ("popup", "pop-up", "dialog", "utility", "transient")
+        )
 
-        if is_browser or is_auth_keywords or self.enable_fallback_heuristic:
-            signature = "unparented-popup"
-            if self.applied_rules.get(window_id) == signature:
-                return True
-            if self._is_rate_limited(f"{window_id}:{signature}"):
-                return True
-            info(f"Unparented popup heuristic matched (size {w}x{h}) for 0x{window_id}; floating automatically")
-            if self._apply_window_actions(window_id, "", "", ["float", "center"]):
-                self.applied_rules[window_id] = signature
-                return True
+        # Strong popup evidence is required: auth title or popup/transient role.
+        # Browser class alone is NEVER sufficient.
+        has_strong_evidence = is_auth_keywords or has_popup_role
+        if not has_strong_evidence:
+            return False
+
+        signature = "unparented-popup"
+        if self.applied_rules.get(window_id) == signature:
+            return True
+        if self._is_rate_limited(f"{window_id}:{signature}"):
+            return True
+        info(f"Unparented popup heuristic matched (size {w}x{h}) for 0x{window_id}; floating automatically")
+        if self._apply_window_actions(window_id, "", "", ["float", "center"]):
+            self.applied_rules[window_id] = signature
+            return True
 
         return False
 
@@ -618,7 +665,7 @@ class Command:
 
             log(f"New window 0x{window_id} - Title: '{title}' | Class: '{window_class}'")
 
-            window_info = self._get_window_info(window_id)
+            window_info = self._get_window_info(window_id, retries=3)
             if not window_info:
                 window_info = {
                     "address": f"0x{window_id}",
