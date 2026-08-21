@@ -39,6 +39,29 @@ class TestInstallSafety(unittest.TestCase):
             self.assertFalse(destination.is_symlink())
             self.assertEqual(destination.read_text(), "first")
 
+    def test_deployer_deploys_portal_mapping_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src_portal_dir = root / "xdg-desktop-portal"
+            src_portal_dir.mkdir()
+            conf_file = src_portal_dir / "hyprland-portals.conf"
+            conf_content = (
+                "[preferred]\n"
+                "default=gtk;hyprland;\n"
+                "org.freedesktop.impl.portal.ScreenCast=hyprland\n"
+                "org.freedesktop.impl.portal.FileChooser=gtk\n"
+                "org.freedesktop.impl.portal.Secret=gnome-keyring;gtk;\n"
+            )
+            conf_file.write_text(conf_content)
+
+            dest_portal_dir = root / ".config" / "xdg-desktop-portal"
+            dest_portal_dir.mkdir(parents=True)
+            Deployer().place_file(conf_file, dest_portal_dir / "hyprland-portals.conf", record=False)
+
+            dest_conf = dest_portal_dir / "hyprland-portals.conf"
+            self.assertTrue(dest_conf.exists())
+            self.assertEqual(dest_conf.read_text(), conf_content)
+
 
 if __name__ == "__main__":
     unittest.main()
