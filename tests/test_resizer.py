@@ -53,17 +53,108 @@ class TestWindowRule(unittest.TestCase):
         self.assertEqual(_parse_match_arg("title:regex=^Foo.*"), ("title", "regex", "^Foo.*"))
         self.assertEqual(_parse_match_arg("title:contains=Bar"), ("title", "contains", "Bar"))
 
-    def test_default_popup_rules_follow_current_title(self):
+    def test_numeric_bounds_predicates(self):
+        rule_lte = WindowRule("", "", "100", "100", [], matches=[("initialWidth", "lte", "1000")])
+        self.assertTrue(rule_lte.evaluate({"initialWidth": 600}))
+        self.assertTrue(rule_lte.evaluate({"initialWidth": 1000}))
+        self.assertFalse(rule_lte.evaluate({"initialWidth": 1024}))
+
+        rule_gte = WindowRule("", "", "100", "100", [], matches=[("initialHeight", "gte", "200")])
+        self.assertTrue(rule_gte.evaluate({"initialHeight": 300}))
+        self.assertFalse(rule_gte.evaluate({"initialHeight": 100}))
+
+    def test_default_popup_rules_composite_criteria(self):
         command = Command(Namespace(daemon=False))
         signin = next(rule for rule in command.window_rules if rule.name == "(?i)Sign In")
-        self.assertEqual(signin.match_type, "titleRegex")
-        self.assertTrue(signin.evaluate({"title": "Account Sign In", "initialTitle": "Loading"}))
 
-    def test_close_event_clears_applied_rule_cache(self):
+        # Main browser tab navigating to sign-in page (large initial size, browser initial title)
+        main_browser_tab = {
+            "title": "Account Sign In",
+            "initialTitle": "Google Chrome",
+            "class": "google-chrome",
+            "initialClass": "google-chrome",
+            "size": [1920, 1080],
+            "initialSize": [1920, 1080],
+            "initialWidth": 1920,
+            "initialHeight": 1080,
+        }
+        self.assertFalse(signin.evaluate(main_browser_tab))
+
+        # OAuth popup with sign in initial title and bounded geometry
+        oauth_popup = {
+            "title": "Account Sign In",
+            "initialTitle": "Account Sign In",
+            "class": "google-chrome",
+            "initialClass": "google-chrome",
+            "size": [600, 700],
+            "initialSize": [600, 700],
+            "initialWidth": 600,
+            "initialHeight": 700,
+        }
+        self.assertTrue(signin.evaluate(oauth_popup))
+
+    def test_unparented_popup_heuristic(self):
         command = Command(Namespace(daemon=False))
+        command._apply_window_actions = lambda window_id, width, height, actions: True
+
+        # Small unparented browser popup
+        unparented_popup = {
+            "address": "0x123",
+            "title": "OAuth Login",
+            "initialTitle": "OAuth Login",
+            "class": "google-chrome",
+            "initialClass": "google-chrome",
+            "size": [500, 600],
+            "initialSize": [500, 600],
+            "modal": False,
+            "parent": "0x0",
+            "xdg_toplevel_parent": "0x0",
+        }
+        self.assertTrue(command._apply_unparented_popup_heuristic("123", unparented_popup))
+
+        # Large main browser window
+        main_browser = {
+            "address": "0x456",
+            "title": "Google Chrome",
+            "initialTitle": "Google Chrome",
+            "class": "google-chrome",
+            "initialClass": "google-chrome",
+            "size": [1920, 1080],
+            "initialSize": [1920, 1080],
+            "modal": False,
+            "parent": "0x0",
+            "xdg_toplevel_parent": "0x0",
+        }
+        self.assertFalse(command._apply_unparented_popup_heuristic("456", main_browser))
+
+    def test_initial_props_tracking_and_close_event(self):
+        command = Command(Namespace(daemon=False))
+
+        open_info = {
+            "address": "0xabc123",
+            "title": "Google Chrome",
+            "initialTitle": "Google Chrome",
+            "class": "google-chrome",
+            "size": [1920, 1080],
+        }
+        command._record_initial_props("abc123", open_info)
+
+        # Runtime title update
+        title_update_info = {
+            "address": "0xabc123",
+            "title": "Sign In - Google Accounts",
+            "class": "google-chrome",
+            "size": [1920, 1080],
+        }
+        enhanced = command._enhance_window_info("abc123", title_update_info)
+        self.assertEqual(enhanced["initialTitle"], "Google Chrome")
+        self.assertEqual(enhanced["title"], "Sign In - Google Accounts")
+
+        # Close event clears cache
         command.applied_rules["abc123"] = "rule"
         command._handle_window_event("closewindow>>abc123")
         self.assertNotIn("abc123", command.applied_rules)
+        self.assertNotIn("abc123", command.window_initial_props)
         
 if __name__ == '__main__':
     unittest.main()
