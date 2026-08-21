@@ -1,0 +1,15 @@
+# Maintainer: Caelestia
+pkgname=caelestia
+pkgver=1.0.0
+pkgrel=1
+depends=(
+    'fuzzel'
+    'libnotify'
+    'swappy'
+    'grim'
+    'slurp'
+    'cliphist'
+    'gpu-screen-recorder'
+    'wl-clipboard'
+    'app2unit'
+)

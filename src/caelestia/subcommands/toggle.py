@@ -135,10 +135,9 @@ class Command:
     def spawn_client(self, selector: Callable, spawn: list[str]) -> bool:
         if not spawn[0].endswith(".desktop") and not ensure_binary(spawn[0]):
             return False
-        if not ensure_binary("app2unit"):
-            return False
         if not any(selector(client) for client in self.get_clients()):
-            hypr.dispatch("exec", f"[workspace special:{self.args.workspace}] app2unit -- {shlex.join(spawn)}")
+            cmd = f"app2unit -- {shlex.join(spawn)}" if shutil.which("app2unit") else shlex.join(spawn)
+            hypr.dispatch("exec", f"[workspace special:{self.args.workspace}] {cmd}")
             return True
         else:
             return False

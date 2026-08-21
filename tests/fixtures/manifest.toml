@@ -1,0 +1,15 @@
+packages = [
+    "fuzzel",
+    "libnotify",
+    "swappy",
+    "grim",
+    "slurp",
+    "cliphist",
+    "gpu-screen-recorder",
+    "wl-clipboard",
+]
+
+[[components]]
+name = "core"
+default = true
+packages = ["app2unit"]

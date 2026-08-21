@@ -38,9 +38,10 @@ def notify(*args: str) -> str:
     return ""
 
 
-def ensure_binary(binary: str) -> bool:
+def ensure_binary(binary: str, required: bool = True) -> bool:
     if not shutil.which(binary):
-        notify("Missing utility", f"Required binary '{binary}' is not installed.")
+        if required:
+            notify("Missing utility", f"Required binary '{binary}' is not installed.")
         return False
     return True
 
