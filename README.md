@@ -80,16 +80,17 @@ yay -S libnotify swappy grim dart-sass app2unit wl-clipboard slurp gpu-screen-re
 ```
 
 Now, clone the repo, `cd` into it, build the wheel via `python -m build --wheel`
-and install it via `python -m installer dist/*.whl`. Then, to install the `fish`
+and install it via `pip install --user dist/*.whl`. Then, to install the `fish`
 completions, copy the `completions/caelestia.fish` file to
-`/usr/share/fish/vendor_completions.d/caelestia.fish`.
+`~/.config/fish/completions/caelestia.fish`.
 
 ```sh
 git clone https://github.com/caelestia-dots/cli.git
 cd cli
 python -m build --wheel
-sudo python -m installer dist/*.whl
-sudo cp completions/caelestia.fish /usr/share/fish/vendor_completions.d/caelestia.fish
+pip install --user dist/*.whl
+mkdir -p ~/.config/fish/completions
+cp completions/caelestia.fish ~/.config/fish/completions/caelestia.fish
 ```
 
 ### Additional steps
@@ -97,39 +98,11 @@ sudo cp completions/caelestia.fish /usr/share/fish/vendor_completions.d/caelesti
 #### Auto folder colour theming
 
 For automatic Papirus folder icon colour syncing, you must have [`papirus-folders`](https://github.com/PapirusDevelopmentTeam/papirus-folders)
-installed, and `papirus-folders` must to be able to run with `sudo` without a password prompt.
-
-You can allow this by creating a sudoers file:
-
-```sh
-echo "$USER ALL=(ALL) NOPASSWD: $(which papirus-folders)" | sudo tee /etc/sudoers.d/papirus-folders
-sudo chmod 440 /etc/sudoers.d/papirus-folders
-```
+installed. Caelestia runs `papirus-folders` in user-space against your local icon directory (`~/.local/share/icons` or `~/.icons`) without requiring administrator privileges.
 
 #### Chromium-based browser theming
 
-For live Chromium-based browser theming, the CLI must be allowed to create certain directories in `/etc`
-and write to them via `sudo` without a password prompt.
-
-You can allow this by creating a sudoers file:
-
-```fish
-# Fish shell
-for dir in /etc/chromium/policies/managed /etc/brave/policies/managed /etc/opt/chrome/policies/managed
-    echo "$USER ALL=(ALL) NOPASSWD: $(which mkdir) -p $dir" | sudo tee -a /etc/sudoers.d/caelestia-chromium
-    echo "$USER ALL=(ALL) NOPASSWD: $(which tee) $dir/caelestia.json" | sudo tee -a /etc/sudoers.d/caelestia-chromium
-end
-sudo chmod 440 /etc/sudoers.d/caelestia-chromium
-```
-
-```sh
-# Bash/other shells
-for dir in /etc/chromium/policies/managed /etc/brave/policies/managed /etc/opt/chrome/policies/managed; do
-    echo "$USER ALL=(ALL) NOPASSWD: $(which mkdir) -p $dir" | sudo tee -a /etc/sudoers.d/caelestia-chromium
-    echo "$USER ALL=(ALL) NOPASSWD: $(which tee) $dir/caelestia.json" | sudo tee -a /etc/sudoers.d/caelestia-chromium
-done
-sudo chmod 440 /etc/sudoers.d/caelestia-chromium
-```
+Chromium-based browser theming (Brave, Chromium, Google Chrome) works out of the box in user-space by updating theme preferences directly in your local browser profile directories (`~/.config/chromium`, `~/.config/BraveSoftware/Brave-Browser`, `~/.config/google-chrome`). No root access or system policy modifications are required.
 
 ## Usage
 
