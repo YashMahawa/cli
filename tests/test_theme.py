@@ -1,5 +1,6 @@
 import os
 import pty
+import time
 from unittest.mock import patch
 from pathlib import Path
 
@@ -79,7 +80,16 @@ def test_apply_terms_partial_write_retry(tmp_path: Path) -> None:
         apply_terms(test_seq, timeout=1.0)
 
         assert mock_select.called
-        read_data = os.read(master, 1024).decode("utf-8")
+        read_bytes = b""
+        while len(read_bytes) < len(test_seq.encode("utf-8")):
+            try:
+                chunk = os.read(master, 1024)
+                if not chunk:
+                    break
+                read_bytes += chunk
+            except BlockingIOError:
+                time.sleep(0.01)
+        read_data = read_bytes.decode("utf-8")
         assert read_data == test_seq
 
     os.close(master)

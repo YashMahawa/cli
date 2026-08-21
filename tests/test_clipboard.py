@@ -19,6 +19,7 @@ def test_clipboard_copy_executes_daemon_copy(tmp_path: MagicMock) -> None:
 
     with (
         patch("caelestia.subcommands.clipboard.c_state_dir", tmp_path),
+        patch("shutil.which", return_value="/usr/bin/fuzzel"),
         patch("subprocess.check_output") as mock_check_output,
         patch("subprocess.run") as mock_run,
     ):
@@ -44,6 +45,7 @@ def test_clipboard_delete_executes_daemon_delete(tmp_path: MagicMock) -> None:
 
     with (
         patch("caelestia.subcommands.clipboard.c_state_dir", tmp_path),
+        patch("shutil.which", return_value="/usr/bin/fuzzel"),
         patch("subprocess.check_output") as mock_check_output,
         patch("subprocess.run") as mock_run,
     ):
@@ -65,6 +67,7 @@ def test_clipboard_missing_file_handles_gracefully(tmp_path: MagicMock) -> None:
 
     with (
         patch("caelestia.subcommands.clipboard.c_state_dir", tmp_path),
+        patch("shutil.which", return_value="/usr/bin/fuzzel"),
         patch("subprocess.check_output") as mock_check_output,
         patch("subprocess.run") as mock_run,
     ):
@@ -89,6 +92,7 @@ def test_clipboard_fuzzel_cancelled(tmp_path: MagicMock) -> None:
 
     with (
         patch("caelestia.subcommands.clipboard.c_state_dir", tmp_path),
+        patch("shutil.which", return_value="/usr/bin/fuzzel"),
         patch("subprocess.check_output", side_effect=subprocess.CalledProcessError(1, ["fuzzel"])),
         patch("subprocess.run") as mock_run,
     ):
@@ -105,6 +109,7 @@ def test_clipboard_empty_text_fallback(tmp_path: MagicMock) -> None:
 
     with (
         patch("caelestia.subcommands.clipboard.c_state_dir", tmp_path),
+        patch("shutil.which", return_value="/usr/bin/fuzzel"),
         patch("subprocess.check_output") as mock_check_output,
         patch("subprocess.run") as mock_run,
     ):

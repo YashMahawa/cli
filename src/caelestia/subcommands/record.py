@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from caelestia.utils import hypr
-from caelestia.utils.notify import close_notification, ensure_binary, notify
+from caelestia.utils.notify import close_notification, ensure_binary, notify, open_path
 from caelestia.utils.paths import get_config, recording_notif_path, recording_path, recordings_dir
 
 RECORDER = "gpu-screen-recorder"
@@ -155,7 +155,7 @@ class Command:
         )
 
         if action == "watch":
-            subprocess.Popen(["app2unit", "-O", new_path], start_new_session=True)
+            open_path(new_path)
         elif action == "open":
             p = subprocess.run(
                 [
@@ -170,6 +170,6 @@ class Command:
                 ]
             )
             if p.returncode != 0:
-                subprocess.Popen(["app2unit", "-O", new_path.parent], start_new_session=True)
+                open_path(new_path.parent)
         elif action == "delete":
             new_path.unlink()

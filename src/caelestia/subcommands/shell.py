@@ -1,6 +1,7 @@
 import subprocess
 from argparse import Namespace
 
+from caelestia.utils.notify import ensure_binary
 from caelestia.utils.paths import c_cache_dir
 
 
@@ -11,6 +12,8 @@ class Command:
         self.args = args
 
     def run(self) -> None:
+        if not ensure_binary("qs"):
+            return
         if self.args.show:
             # Print the ipc
             self.print_ipc()
@@ -41,6 +44,8 @@ class Command:
                             print(line, end="")
 
     def shell(self, *args: str) -> str:
+        if not ensure_binary("qs"):
+            return ""
         return subprocess.check_output(["qs", "-c", "caelestia", *args], text=True)
 
     def filter_log(self, line: str) -> bool:

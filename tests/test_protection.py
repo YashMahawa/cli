@@ -146,3 +146,117 @@ def test_manifest_sync_with_pkgbuild():
     for dep in cli_runtime_deps:
         if dep in manifest_pkgs:
             assert dep in pkgbuild_text, f"{dep} is in manifest.toml but missing from PKGBUILD"
+
+
+def test_notify_dbus_fallback_action_selection():
+    mock_monitor_proc = MagicMock()
+    mock_monitor_proc.stdout = [
+        "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked (uint32 42, 'watch')\n"
+    ]
+    mock_monitor_proc.poll.return_value = None
+
+    with patch("shutil.which", side_effect=lambda x: "/usr/bin/gdbus" if x == "gdbus" else None), \
+         patch("subprocess.Popen", return_value=mock_monitor_proc) as mock_popen, \
+         patch("subprocess.check_output", return_value="(uint32 42,)\n"):
+
+        action = notify("--action=watch=Watch", "--action=open=Open", "Recording stopped")
+        assert action == "watch"
+        mock_popen.assert_called_once_with(
+            ["gdbus", "monitor", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+
+def test_notify_dbus_fallback_notification_closed():
+    mock_monitor_proc = MagicMock()
+    mock_monitor_proc.stdout = [
+        "/org/freedesktop/Notifications: org.freedesktop.Notifications.NotificationClosed (uint32 42, uint32 1)\n"
+    ]
+    mock_monitor_proc.poll.return_value = None
+
+    with patch("shutil.which", side_effect=lambda x: "/usr/bin/gdbus" if x == "gdbus" else None), \
+         patch("subprocess.Popen", return_value=mock_monitor_proc), \
+         patch("subprocess.check_output", return_value="(uint32 42,)\n"):
+
+        action = notify("--action=watch=Watch", "Recording stopped")
+        assert action == ""
+
+
+def test_notify_dbus_fallback_print_id():
+    with patch("shutil.which", side_effect=lambda x: "/usr/bin/gdbus" if x == "gdbus" else None), \
+         patch("subprocess.check_output", return_value="(uint32 99,)\n"):
+
+        notif_id = notify("-p", "Recording started", "Recording...")
+        assert notif_id == "99"
+
+
+def test_open_path_fallbacks(tmp_path: Path):
+    from caelestia.utils.notify import open_path
+
+    target = tmp_path / "video.mp4"
+
+    # 1. app2unit available
+    with patch("shutil.which", side_effect=lambda x: "/usr/bin/app2unit" if x == "app2unit" else None), \
+         patch("subprocess.Popen") as mock_popen:
+        assert open_path(target) is True
+        mock_popen.assert_called_once_with(["app2unit", "-O", str(target)], start_new_session=True)
+
+    # 2. xdg-open available
+    with patch("shutil.which", side_effect=lambda x: "/usr/bin/xdg-open" if x == "xdg-open" else None), \
+         patch("subprocess.Popen") as mock_popen:
+        assert open_path(target) is True
+        mock_popen.assert_called_once_with(["xdg-open", str(target)], start_new_session=True)
+
+    # 3. gio available
+    with patch("shutil.which", side_effect=lambda x: "/usr/bin/gio" if x == "gio" else None), \
+         patch("subprocess.Popen") as mock_popen:
+        assert open_path(target) is True
+        mock_popen.assert_called_once_with(["gio", "open", str(target)], start_new_session=True)
+
+    # 4. No opener available
+    with patch("shutil.which", return_value=None), \
+         patch("caelestia.utils.notify.notify") as mock_notify:
+        assert open_path(target) is False
+        mock_notify.assert_called_once_with(
+            "Missing opener", "No supported file opener (app2unit, xdg-open, or gio) is installed."
+        )
+
+
+def test_record_actions_use_open_path(tmp_path: Path):
+    from caelestia.subcommands.record import Command as RecordCommand
+
+    rec_file = tmp_path / "test.mp4"
+    rec_file.write_text("data")
+    cmd = RecordCommand(Namespace(clipboard=False))
+
+    with patch("caelestia.subcommands.record.recordings_dir", tmp_path), \
+         patch("caelestia.subcommands.record.recording_path", rec_file), \
+         patch("caelestia.subcommands.record.recording_notif_path", tmp_path / "notif"), \
+         patch("subprocess.run"), \
+         patch("caelestia.subcommands.record.notify", return_value="watch"), \
+         patch("caelestia.subcommands.record.open_path") as mock_open_path:
+
+        cmd.stop()
+        mock_open_path.assert_called_once()
+
+
+def test_clipboard_fuzzel_protection():
+    from caelestia.subcommands.clipboard import Command as ClipboardCommand
+
+    cmd = ClipboardCommand(Namespace(delete=False))
+    with patch("shutil.which", return_value=None), \
+         patch("caelestia.utils.notify.notify") as mock_notify:
+        cmd.run()
+        mock_notify.assert_called_once_with("Missing utility", "Required binary 'fuzzel' is not installed.")
+
+
+def test_shell_qs_protection():
+    from caelestia.subcommands.shell import Command as ShellCommand
+
+    cmd = ShellCommand(Namespace(show=True, log=False, kill=False, message=None))
+    with patch("shutil.which", return_value=None), \
+         patch("caelestia.utils.notify.notify") as mock_notify:
+        cmd.run()
+        mock_notify.assert_called_once_with("Missing utility", "Required binary 'qs' is not installed.")
