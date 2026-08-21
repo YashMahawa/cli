@@ -28,7 +28,11 @@ class Command:
 
         # Run system update
         try:
-            installer = PackageInstaller.get(self.args.aur_helper or state.aur_helper, self.args.noconfirm)
+            installer = PackageInstaller.get(
+                self.args.aur_helper or state.aur_helper,
+                self.args.noconfirm,
+                no_packages=getattr(self.args, "no_packages", False),
+            )
             installer.system_update()
         except PackageError as e:
             fatal(e)

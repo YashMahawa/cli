@@ -363,6 +363,44 @@ def apply_warp(colours: dict[str, str], mode: str) -> None:
     atomic_write(data_dir / "warp-terminal/themes/caelestia.yaml", template)
 
 
+def _is_chromium_profile_active(profile_dir: Path, b_dir: Path) -> bool:
+    """Return True if a browser process appears to be actively using the given profile or browser directory."""
+    for lock_path in (profile_dir / "SingletonLock", b_dir / "SingletonLock"):
+        if lock_path.is_symlink() or lock_path.exists():
+            try:
+                if lock_path.is_symlink():
+                    target = os.readlink(lock_path)
+                    pid_str = target.rpartition("-")[2]
+                    if pid_str.isdigit():
+                        os.kill(int(pid_str), 0)
+                        return True
+                return True
+            except (OSError, ValueError):
+                pass
+
+    b_name = b_dir.name.lower()
+    proc_map = {
+        "chromium": ["chromium", "chromium-freeworld"],
+        "brave": ["brave", "brave-browser"],
+        "chrome": ["chrome", "google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-unstable"],
+    }
+    procs_to_check = []
+    for key, procs in proc_map.items():
+        if key in b_name or key.replace("-", "") in b_name.replace("-", ""):
+            procs_to_check.extend(procs)
+
+    if procs_to_check and shutil.which("pgrep"):
+        for proc in procs_to_check:
+            try:
+                res = subprocess.run(["pgrep", "-x", proc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if res.returncode == 0:
+                    return True
+            except OSError:
+                pass
+
+    return False
+
+
 @log_exception
 def apply_chromium(colours: dict[str, str]) -> None:
     surface_hex = colours["surface"]
@@ -395,13 +433,30 @@ def apply_chromium(colours: dict[str, str]) -> None:
             profile_dirs = [b_dir / "Default"]
 
         for profile_dir in profile_dirs:
+            if _is_chromium_profile_active(profile_dir, b_dir):
+                warn(f"Skipping active Chromium profile preferences rewrite: {profile_dir}")
+                continue
+
             pref_file = profile_dir / "Preferences"
             prefs = {}
             if pref_file.exists():
                 try:
-                    prefs = json.loads(pref_file.read_text(encoding="utf-8"))
-                except Exception:
-                    prefs = {}
+                    raw_text = pref_file.read_text(encoding="utf-8")
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict):
+                        prefs = parsed
+                    else:
+                        warn(f"Skipping Chromium preferences update for {pref_file}: content is not a JSON object")
+                        continue
+                except Exception as e:
+                    warn(f"Skipping Chromium preferences update for {pref_file}: malformed or unreadable JSON ({e})")
+                    continue
+
+                backup_file = profile_dir / "Preferences.bak"
+                try:
+                    shutil.copy2(pref_file, backup_file)
+                except OSError as e:
+                    warn(f"Failed to create backup for {pref_file}: {e}")
 
             if "browser" not in prefs or not isinstance(prefs["browser"], dict):
                 prefs["browser"] = {}

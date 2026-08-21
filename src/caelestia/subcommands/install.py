@@ -197,7 +197,11 @@ class Command:
     def install_packages(
         self, source: DotsSource, manifest: Manifest
     ) -> tuple[PackageInstaller, dict[str, str], dict[str, list[str]]]:
-        installer = PackageInstaller.get(self.args.aur_helper, self.args.noconfirm)
+        installer = PackageInstaller.get(
+            self.args.aur_helper,
+            self.args.noconfirm,
+            no_packages=getattr(self.args, "no_packages", False),
+        )
 
         packages = {}
         desired = manifest.enabled_packages()

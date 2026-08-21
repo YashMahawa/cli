@@ -168,6 +168,13 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         "--disable-components", metavar="LIST", help="comma-separated list of components to disable"
     )
     install_parser.add_argument("--noconfirm", action="store_true", help="use defaults for all prompts")
+    install_parser.add_argument(
+        "--no-packages",
+        "--user-only",
+        action="store_true",
+        dest="no_packages",
+        help="skip package installation for user-space/user-only setup",
+    )
     _set_install_epilog(install_parser)
 
     # Create parser for update opts
@@ -175,6 +182,13 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     update_parser.set_defaults(cls=update.Command)
     update_parser.add_argument("--aur-helper", choices=AUR_HELPERS, help="the AUR helper to use")
     update_parser.add_argument("--noconfirm", action="store_true", help="use defaults for all prompts")
+    update_parser.add_argument(
+        "--no-packages",
+        "--user-only",
+        action="store_true",
+        dest="no_packages",
+        help="skip package update for user-space/user-only setup",
+    )
 
     return parser, parser.parse_args()
 
