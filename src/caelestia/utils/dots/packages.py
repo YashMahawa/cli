@@ -65,7 +65,7 @@ def _vercmp(a: str, b: str) -> int:
 
 
 def _install_aur_helper(helper: str, noconfirm: bool = False) -> None:
-    pacman_cmd = ["pacman", "-S", "--needed", "git", "base-devel"]
+    pacman_cmd = ["sudo", "pacman", "-S", "--needed", "git", "base-devel"]
     if noconfirm:
         pacman_cmd.append("--noconfirm")
     _try_run(pacman_cmd, "failed to install AUR helper build dependencies")
@@ -91,8 +91,11 @@ def _install_aur_helper(helper: str, noconfirm: bool = False) -> None:
 
 class PackageInstaller(ABC):
     @staticmethod
-    def get(helper: str | None = None, noconfirm: bool = False) -> "PackageInstaller":
+    def get(helper: str | None = None, noconfirm: bool = False, no_packages: bool = False) -> "PackageInstaller":
         """Pick a package installer: the requested/detected AUR helper on Arch, else a no-op."""
+
+        if no_packages:
+            return NoopInstaller()
 
         # Not on Arch, can't install packages
         if shutil.which("pacman") is None:
@@ -216,9 +219,11 @@ class ArchInstaller(PackageInstaller):
 
         self.install(depends, explicit=False)
 
+        # Stop makepkg from resetting sudo
+        env = {**os.environ, "PACMAN_AUTH": "sudo"}
         # -f = force, -s = sync deps, -i = install
         _try_run(
-            ["makepkg", "-fsi", *self.flags], f"failed to build local package in {directory}", cwd=directory
+            ["makepkg", "-fsi", *self.flags], f"failed to build local package in {directory}", cwd=directory, env=env
         )
 
         # Clean build artifacts
