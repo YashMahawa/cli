@@ -53,6 +53,11 @@ class TestOverlayParser(unittest.TestCase):
 
 
 class TestOverlayCommand(unittest.TestCase):
+    def setUp(self):
+        which_patcher = patch("caelestia.subcommands.overlay.shutil.which", return_value="caelestia-qs-ipc")
+        self.mock_which = which_patcher.start()
+        self.addCleanup(which_patcher.stop)
+
     def _make_proc(self, returncode=0, stdout='{"success": true}', stderr=""):
         proc = MagicMock()
         proc.returncode = returncode
@@ -107,6 +112,22 @@ class TestOverlayCommand(unittest.TestCase):
                 check=False,
             )
             mock_print.assert_called_once_with('{"success": true}')
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_ipc_uses_resolved_binary_path(self, mock_run):
+        self.mock_which.return_value = "/usr/bin/caelestia-qs-ipc"
+        mock_run.return_value = self._make_proc(stdout='{"success": true}')
+        args = Namespace(overlay_action="list")
+        cmd = Command(args)
+
+        with patch("builtins.print") as mock_print, patch.object(cmd, "check_compatibility", return_value=True):
+            cmd.run()
+            mock_run.assert_called_with(
+                ["/usr/bin/caelestia-qs-ipc", "call", "overlay", "list"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
     def test_anchor_invalid_numeric_margin(self):
         args_non_numeric = Namespace(overlay_action="anchor", position="top-right", window="active", margin="abc")
