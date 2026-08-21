@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 from argparse import Namespace
 
 from caelestia.parser import parse_args
-from caelestia.subcommands.overlay import Command
+from caelestia.subcommands.overlay import Command, MIN_SERVICE_VERSION
 
 
 class TestOverlayParser(unittest.TestCase):
@@ -53,54 +53,131 @@ class TestOverlayParser(unittest.TestCase):
 
 
 class TestOverlayCommand(unittest.TestCase):
-    @patch("caelestia.subcommands.overlay.subprocess.check_output")
-    def test_register_command_send_ipc(self, mock_check_output):
-        mock_check_output.return_value = '{"success": true}'
+    def _make_proc(self, returncode=0, stdout='{"success": true}', stderr=""):
+        proc = MagicMock()
+        proc.returncode = returncode
+        proc.stdout = stdout
+        proc.stderr = stderr
+        return proc
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_register_command_send_ipc(self, mock_run):
+        mock_run.return_value = self._make_proc(stdout='{"success": true}')
         args = Namespace(overlay_action="register", window="active", anchor="top-left", pin=True, clickthrough=True)
         cmd = Command(args)
 
-        with patch("builtins.print") as mock_print:
+        with patch("builtins.print") as mock_print, patch.object(cmd, "check_compatibility", return_value=True):
             cmd.run()
-            mock_check_output.assert_called_once_with(
-                ["qs", "-c", "caelestia", "ipc", "call", "overlay", "register", "active", "top-left", "true", "true"],
-                text=True
+            mock_run.assert_called_with(
+                ["caelestia-qs-ipc", "call", "overlay", "register", "active", "top-left", "true", "true"],
+                capture_output=True,
+                text=True,
+                check=False,
             )
             mock_print.assert_called_once_with('{"success": true}')
 
-    @patch("caelestia.subcommands.overlay.subprocess.check_output")
-    def test_unregister_command_send_ipc(self, mock_check_output):
-        mock_check_output.return_value = '{"success": true, "action": "unregistered"}'
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_unregister_command_send_ipc(self, mock_run):
+        mock_run.return_value = self._make_proc(stdout='{"success": true, "action": "unregistered"}')
         args = Namespace(overlay_action="unregister", window="0x1234")
         cmd = Command(args)
 
-        with patch("builtins.print") as mock_print:
+        with patch("builtins.print") as mock_print, patch.object(cmd, "check_compatibility", return_value=True):
             cmd.run()
-            mock_check_output.assert_called_once_with(
-                ["qs", "-c", "caelestia", "ipc", "call", "overlay", "unregister", "0x1234"],
-                text=True
+            mock_run.assert_called_with(
+                ["caelestia-qs-ipc", "call", "overlay", "unregister", "0x1234"],
+                capture_output=True,
+                text=True,
+                check=False,
             )
             mock_print.assert_called_once_with('{"success": true, "action": "unregistered"}')
 
-    @patch("caelestia.subcommands.overlay.subprocess.check_output")
-    def test_anchor_command_send_ipc(self, mock_check_output):
-        mock_check_output.return_value = '{"success": true}'
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_anchor_command_send_ipc(self, mock_run):
+        mock_run.return_value = self._make_proc(stdout='{"success": true}')
         args = Namespace(overlay_action="anchor", position="top-right", window="active", margin="20")
         cmd = Command(args)
 
-        with patch("builtins.print") as mock_print:
+        with patch("builtins.print") as mock_print, patch.object(cmd, "check_compatibility", return_value=True):
             cmd.run()
-            mock_check_output.assert_called_once_with(
-                ["qs", "-c", "caelestia", "ipc", "call", "overlay", "anchor", "top-right", "active", "20"],
-                text=True
+            mock_run.assert_called_with(
+                ["caelestia-qs-ipc", "call", "overlay", "anchor", "top-right", "active", "20"],
+                capture_output=True,
+                text=True,
+                check=False,
             )
             mock_print.assert_called_once_with('{"success": true}')
 
-    @patch("caelestia.subcommands.overlay.subprocess.check_output")
-    def test_ipc_error_handling(self, mock_check_output):
-        mock_check_output.side_effect = Exception("IPC failure")
+    def test_anchor_invalid_numeric_margin(self):
+        args_non_numeric = Namespace(overlay_action="anchor", position="top-right", window="active", margin="abc")
+        cmd = Command(args_non_numeric)
+        with patch("caelestia.subcommands.overlay.error") as mock_error, self.assertRaises(SystemExit) as ctx:
+            cmd.run()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_error.assert_called_once()
+        self.assertIn("Invalid numeric margin", mock_error.call_args[0][0])
+
+        args_negative = Namespace(overlay_action="anchor", position="top-right", window="active", margin="-5")
+        cmd2 = Command(args_negative)
+        with patch("caelestia.subcommands.overlay.error") as mock_error2, self.assertRaises(SystemExit) as ctx2:
+            cmd2.run()
+        self.assertEqual(ctx2.exception.code, 1)
+        mock_error2.assert_called_once()
+        self.assertIn("Invalid numeric margin", mock_error2.call_args[0][0])
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_missing_shell(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("caelestia-qs-ipc not found")
         args = Namespace(overlay_action="list")
         cmd = Command(args)
 
-        with patch("caelestia.subcommands.overlay.error") as mock_error:
+        with patch("caelestia.subcommands.overlay.error") as mock_error, patch.object(cmd, "check_compatibility", return_value=True), self.assertRaises(SystemExit) as ctx:
             cmd.run()
-            mock_error.assert_called_once()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_error.assert_called_once()
+        self.assertIn("Shell overlay service is not running", mock_error.call_args[0][0])
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_stale_window(self, mock_run):
+        mock_run.return_value = self._make_proc(
+            returncode=1,
+            stdout='{"error": "stale_window", "message": "Window 0xdeadbeef no longer exists"}'
+        )
+        args = Namespace(overlay_action="pin", window="0xdeadbeef", enable=True, disable=False)
+        cmd = Command(args)
+
+        with patch("caelestia.subcommands.overlay.error") as mock_error, patch.object(cmd, "check_compatibility", return_value=True), self.assertRaises(SystemExit) as ctx:
+            cmd.run()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_error.assert_called_once()
+        self.assertIn("Overlay window is stale or no longer exists", mock_error.call_args[0][0])
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_restart_recovery(self, mock_run):
+        mock_run.return_value = self._make_proc(
+            returncode=1,
+            stdout='{"error": "service_restarted", "message": "Overlay service restarted, state lost"}'
+        )
+        args = Namespace(overlay_action="toggle", window="active")
+        cmd = Command(args)
+
+        with patch("caelestia.subcommands.overlay.error") as mock_error, patch.object(cmd, "check_compatibility", return_value=True), self.assertRaises(SystemExit) as ctx:
+            cmd.run()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_error.assert_called_once()
+        self.assertIn("Shell overlay service was restarted", mock_error.call_args[0][0])
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_incompatible_service_versions(self, mock_run):
+        mock_run.return_value = self._make_proc(
+            returncode=0,
+            stdout='{"version": "0.5.0", "compatible": false}'
+        )
+        args = Namespace(overlay_action="list")
+        cmd = Command(args)
+
+        with patch("caelestia.subcommands.overlay.error") as mock_error, self.assertRaises(SystemExit) as ctx:
+            cmd.run()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_error.assert_called_once()
+        self.assertIn("Incompatible overlay service version", mock_error.call_args[0][0])
