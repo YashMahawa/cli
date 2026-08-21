@@ -13,7 +13,6 @@ The main control script for the Caelestia dotfiles.
 - [`slurp`](https://github.com/emersion/slurp) - selecting an area
 - [`gpu-screen-recorder`](https://git.dec05eba.com/gpu-screen-recorder/about) - screen recording
 - `glib2` - closing notifications
-- [`cliphist`](https://github.com/sentriz/cliphist) - clipboard history
 - [`fuzzel`](https://codeberg.org/dnkl/fuzzel) - clipboard history/emoji picker
 
 </details>
@@ -77,7 +76,7 @@ Install all [dependencies](#dependencies), then install
 e.g. via an AUR helper (yay)
 
 ```sh
-yay -S libnotify swappy grim dart-sass app2unit wl-clipboard slurp gpu-screen-recorder glib2 cliphist fuzzel python-build python-installer python-hatch python-hatch-vcs
+yay -S libnotify swappy grim dart-sass app2unit wl-clipboard slurp gpu-screen-recorder glib2 fuzzel python-build python-installer python-hatch python-hatch-vcs
 ```
 
 Now, clone the repo, `cd` into it, build the wheel via `python -m build --wheel`

@@ -10,6 +10,65 @@ from caelestia.utils.io import error, fatal, info, log, warn, log_exception
 from caelestia.utils.paths import get_config, user_config_path
 
 
+def _get_prop_value(window_info: dict, prop: str) -> Any:
+    normalized_prop = "class" if prop in ("window_class", "initialClass") and prop == "window_class" else prop
+
+    if normalized_prop in ("width", "size.width", "size_width", "size.0"):
+        if "width" in window_info and window_info["width"] is not None:
+            return window_info["width"]
+        size = window_info.get("size")
+        if isinstance(size, (list, tuple)) and len(size) >= 1:
+            return size[0]
+        return 0
+    elif normalized_prop in ("height", "size.height", "size_height", "size.1"):
+        if "height" in window_info and window_info["height"] is not None:
+            return window_info["height"]
+        size = window_info.get("size")
+        if isinstance(size, (list, tuple)) and len(size) >= 2:
+            return size[1]
+        return 0
+    elif normalized_prop in ("initialWidth", "initial_width"):
+        if "initialWidth" in window_info and window_info["initialWidth"] is not None:
+            return window_info["initialWidth"]
+        initial_size = window_info.get("initialSize")
+        if isinstance(initial_size, (list, tuple)) and len(initial_size) >= 1:
+            return initial_size[0]
+        size = window_info.get("size")
+        if isinstance(size, (list, tuple)) and len(size) >= 1:
+            return size[0]
+        return 0
+    elif normalized_prop in ("initialHeight", "initial_height"):
+        if "initialHeight" in window_info and window_info["initialHeight"] is not None:
+            return window_info["initialHeight"]
+        initial_size = window_info.get("initialSize")
+        if isinstance(initial_size, (list, tuple)) and len(initial_size) >= 2:
+            return initial_size[1]
+        size = window_info.get("size")
+        if isinstance(size, (list, tuple)) and len(size) >= 2:
+            return size[1]
+        return 0
+
+    current_val = window_info
+    for part in normalized_prop.split('.'):
+        if isinstance(current_val, dict):
+            current_val = current_val.get(part, "")
+        elif isinstance(current_val, (list, tuple)):
+            try:
+                idx = int(part)
+                current_val = current_val[idx] if 0 <= idx < len(current_val) else ""
+            except ValueError:
+                current_val = ""
+                break
+        else:
+            current_val = ""
+            break
+
+    if prop == "workspace" and isinstance(current_val, dict):
+        current_val = current_val.get("name", current_val.get("id", ""))
+
+    return current_val
+
+
 class WindowRule:
     def __init__(self, name: str, match_type: str, width: str, height: str, actions: list[str], matches: Optional[list[tuple[str, str, str]]] = None):
         self.name = name
@@ -44,36 +103,63 @@ class WindowRule:
             return False
             
         for prop, predicate, value in self.matches:
-            normalized_prop = "class" if prop == "window_class" else prop
-            
-            current_val = window_info
-            for part in normalized_prop.split('.'):
-                if isinstance(current_val, dict):
-                    current_val = current_val.get(part, "")
-                else:
-                    current_val = ""
-                    break
-            
-            if prop == "workspace" and isinstance(current_val, dict):
-                current_val = current_val.get("name", current_val.get("id", ""))
-            
-            window_val = str(current_val)
-            
-            if predicate == "exact":
-                if window_val != value:
-                    return False
-            elif predicate == "contains":
-                if value not in window_val:
-                    return False
-            elif predicate == "regex":
+            actual_pred = predicate
+            if prop in ("max_width", "max_height"):
+                actual_prop = "initialWidth" if prop == "max_width" else "initialHeight"
+                if actual_pred in ("exact", ""):
+                    actual_pred = "lte"
+            elif prop in ("min_width", "min_height"):
+                actual_prop = "initialWidth" if prop == "min_width" else "initialHeight"
+                if actual_pred in ("exact", ""):
+                    actual_pred = "gte"
+            else:
+                actual_prop = prop
+
+            window_val = _get_prop_value(window_info, actual_prop)
+
+            if actual_pred in (
+                "less_than", "lt", "<",
+                "less_than_or_equal", "lte", "le", "<=", "max",
+                "greater_than", "gt", ">",
+                "greater_than_or_equal", "gte", "ge", ">=", "min",
+            ):
                 try:
-                    if not re.search(value, window_val):
+                    num_win = float(window_val)
+                    num_val = float(value)
+                except (ValueError, TypeError):
+                    return False
+
+                if actual_prop in ("initialWidth", "initialHeight", "width", "height", "initial_width", "initial_height"):
+                    if num_win <= 0:
+                        return False
+
+                if actual_pred in ("less_than", "lt", "<"):
+                    if not (num_win < num_val):
+                        return False
+                elif actual_pred in ("less_than_or_equal", "lte", "le", "<=", "max"):
+                    if not (num_win <= num_val):
+                        return False
+                elif actual_pred in ("greater_than", "gt", ">"):
+                    if not (num_win > num_val):
+                        return False
+                elif actual_pred in ("greater_than_or_equal", "gte", "ge", ">=", "min"):
+                    if not (num_win >= num_val):
+                        return False
+            elif actual_pred == "exact":
+                if str(window_val) != str(value):
+                    return False
+            elif actual_pred == "contains":
+                if str(value) not in str(window_val):
+                    return False
+            elif actual_pred == "regex":
+                try:
+                    if not re.search(value, str(window_val)):
                         return False
                 except re.error:
                     warn(f"invalid regex pattern '{value}'")
                     return False
             else:
-                if window_val != value:
+                if str(window_val) != str(value):
                     return False
                     
         return True
@@ -97,6 +183,7 @@ class Command:
         self.args = args
         self.timeout_tracker: dict[str, float] = {}
         self.applied_rules: dict[str, str] = {}
+        self.window_initial_props: dict[str, dict[str, Any]] = {}
         
         self.enable_fallback_heuristic = False
         self.window_rules = self._load_window_rules()
@@ -121,12 +208,93 @@ class Command:
             return "dispatch hl.dsp.window.center()"
         return "dispatch centerwindow"
 
+    def _record_initial_props(self, window_id: str, window_info: dict, fallback_title: str = "", fallback_class: str = "") -> None:
+        initial_title = window_info.get("initialTitle") or window_info.get("title") or fallback_title
+        initial_class = window_info.get("initialClass") or window_info.get("class") or fallback_class
+        size = window_info.get("size")
+        if not (isinstance(size, (list, tuple)) and len(size) >= 2):
+            size = [0, 0]
+
+        w = size[0] if isinstance(size[0], (int, float)) else 0
+        h = size[1] if isinstance(size[1], (int, float)) else 0
+
+        if window_id in self.window_initial_props:
+            stored = self.window_initial_props[window_id]
+            stored_w = stored.get("initialWidth", 0)
+            stored_h = stored.get("initialHeight", 0)
+
+            if (stored_w <= 0 or stored_h <= 0) and (w > 0 and h > 0):
+                stored["initialSize"] = [w, h]
+                stored["initialWidth"] = w
+                stored["initialHeight"] = h
+
+            if initial_title and (not stored.get("initialTitle") or stored.get("initialTitle") == fallback_title):
+                stored["initialTitle"] = initial_title
+            if initial_class and (not stored.get("initialClass") or stored.get("initialClass") == fallback_class):
+                stored["initialClass"] = initial_class
+            return
+
+        self.window_initial_props[window_id] = {
+            "initialTitle": initial_title,
+            "initialClass": initial_class,
+            "initialSize": [w, h],
+            "initialWidth": w,
+            "initialHeight": h,
+        }
+
+    def _enhance_window_info(self, window_id: str, window_info: dict) -> dict:
+        if not isinstance(window_info, dict):
+            return window_info
+
+        initial_props = self.window_initial_props.get(window_id, {})
+        for key, val in initial_props.items():
+            if key not in window_info or window_info[key] is None or window_info[key] == "":
+                window_info[key] = val
+
+        if "initialTitle" not in window_info or not window_info["initialTitle"]:
+            window_info["initialTitle"] = window_info.get("title", "")
+        if "initialClass" not in window_info or not window_info["initialClass"]:
+            window_info["initialClass"] = window_info.get("class", "")
+
+        size = window_info.get("size")
+        if isinstance(size, (list, tuple)) and len(size) >= 2:
+            if "initialSize" not in window_info:
+                window_info["initialSize"] = [size[0], size[1]]
+            if "initialWidth" not in window_info:
+                window_info["initialWidth"] = size[0]
+            if "initialHeight" not in window_info:
+                window_info["initialHeight"] = size[1]
+
+        return window_info
+
     def _load_window_rules(self) -> list[WindowRule]:
         default_rules = [
             WindowRule("(Bitwarden", "titleContains", "20%", "54%", ["float", "center"]),
             WindowRule("^[Pp]icture(-| )in(-| )[Pp]icture$", "titleRegex", "", "", ["pip"]),
-            WindowRule("(?i)Sign In", "titleRegex", "", "", ["float", "center"]),
-            WindowRule("(?i)Verification", "titleRegex", "", "", ["float", "center"]),
+            WindowRule(
+                "(?i)Sign In",
+                "",
+                "",
+                "",
+                ["float", "center"],
+                matches=[
+                    ("initialTitle", "regex", "(?i)Sign In"),
+                    ("initialWidth", "lte", "1000"),
+                    ("initialHeight", "lte", "800"),
+                ],
+            ),
+            WindowRule(
+                "(?i)Verification",
+                "",
+                "",
+                "",
+                ["float", "center"],
+                matches=[
+                    ("initialTitle", "regex", "(?i)Verification"),
+                    ("initialWidth", "lte", "1000"),
+                    ("initialHeight", "lte", "800"),
+                ],
+            ),
             WindowRule("(?i)Splash", "titleRegex", "", "", ["float", "center"]),
             WindowRule("(?i)^(?!.*The Updater).*Updater.*$", "titleRegex", "", "", ["float", "center"]),
         ]
@@ -138,13 +306,23 @@ class Command:
             if "resizer" in config and "rules" in config["resizer"]:
                 rules = []
                 for rule_config in config["resizer"]["rules"]:
+                    matches = []
+                    if "matches" in rule_config:
+                        for match_item in rule_config["matches"]:
+                            if isinstance(match_item, (list, tuple)) and len(match_item) == 3:
+                                matches.append((str(match_item[0]), str(match_item[1]), str(match_item[2])))
+                            elif isinstance(match_item, str):
+                                p, pred, val = _parse_match_arg(match_item)
+                                if p:
+                                    matches.append((p, pred, val))
                     rules.append(
                         WindowRule(
-                            rule_config["name"],
-                            rule_config["matchType"],
-                            rule_config["width"],
-                            rule_config["height"],
-                            rule_config["actions"],
+                            rule_config.get("name", ""),
+                            rule_config.get("matchType", ""),
+                            rule_config.get("width", ""),
+                            rule_config.get("height", ""),
+                            rule_config.get("actions", []),
+                            matches=matches if matches else None,
                         )
                     )
                 return rules + default_rules
@@ -165,15 +343,26 @@ class Command:
         self.timeout_tracker[key] = current_time
         return False
 
-    def _get_window_info(self, window_id: str) -> Optional[Dict[str, Any]]:
-        try:
-            clients = hypr.message("clients")
-            if isinstance(clients, list):
-                for client in clients:
-                    if isinstance(client, dict) and client.get("address") == f"0x{window_id}":
-                        return client
-        except Exception:
-            pass
+    def _get_window_info(self, window_id: str, retries: int = 0) -> Optional[Dict[str, Any]]:
+        attempts = 1 + max(0, retries)
+        for attempt in range(attempts):
+            try:
+                clients = hypr.message("clients")
+                if isinstance(clients, list):
+                    for client in clients:
+                        if isinstance(client, dict) and client.get("address") == f"0x{window_id}":
+                            size = client.get("size")
+                            w = size[0] if isinstance(size, (list, tuple)) and len(size) >= 1 and isinstance(size[0], (int, float)) else 0
+                            h = size[1] if isinstance(size, (list, tuple)) and len(size) >= 2 and isinstance(size[1], (int, float)) else 0
+
+                            self._record_initial_props(window_id, client)
+                            if (w > 0 and h > 0) or attempt == attempts - 1:
+                                return self._enhance_window_info(window_id, client)
+            except Exception:
+                pass
+
+            if attempt < attempts - 1:
+                time.sleep(0.02)
 
         return None
 
@@ -348,6 +537,70 @@ class Command:
             self.applied_rules[window_id] = signature
         return True
 
+    def _apply_unparented_popup_heuristic(self, window_id: str, window_info: dict) -> bool:
+        """Evaluate unparented popups against creation geometry thresholds requiring strong popup evidence."""
+        modal_state = window_info.get("modal", False)
+        parent_addr = window_info.get("parent", "")
+        xdg_parent = window_info.get("xdg_toplevel_parent", "")
+        transient_for = window_info.get("transient_for", "")
+        has_parent = (
+            (bool(parent_addr) and parent_addr not in ("0x0", "", "0"))
+            or (bool(xdg_parent) and xdg_parent not in ("0x0", "", "0"))
+            or (bool(transient_for) and transient_for not in ("0x0", "", "0"))
+        )
+        if modal_state or has_parent:
+            return False
+
+        size = window_info.get("initialSize") or window_info.get("size", [0, 0])
+        if not isinstance(size, (list, tuple)) or len(size) < 2:
+            return False
+
+        w, h = size[0], size[1]
+        if not (isinstance(w, (int, float)) and isinstance(h, (int, float))):
+            return False
+
+        if w <= 0 or h <= 0:
+            return False
+
+        is_popup_geometry = 200 <= w <= 1000 and 100 <= h <= 800 and (w / h if h > 0 else 0) >= 0.3
+        if not is_popup_geometry:
+            return False
+
+        title = (window_info.get("title", "") or window_info.get("initialTitle", "")).lower()
+        role = str(
+            window_info.get("role")
+            or window_info.get("windowRole")
+            or window_info.get("window_role")
+            or window_info.get("type")
+            or ""
+        ).lower()
+
+        is_auth_keywords = any(
+            kw in title
+            for kw in ("sign in", "verification", "log in", "login", "oauth", "auth", "sso", "accounts")
+        )
+        has_popup_role = any(
+            r in role for r in ("popup", "pop-up", "dialog", "utility", "transient")
+        )
+
+        # Strong popup evidence is required: auth title or popup/transient role.
+        # Browser class alone is NEVER sufficient.
+        has_strong_evidence = is_auth_keywords or has_popup_role
+        if not has_strong_evidence:
+            return False
+
+        signature = "unparented-popup"
+        if self.applied_rules.get(window_id) == signature:
+            return True
+        if self._is_rate_limited(f"{window_id}:{signature}"):
+            return True
+        info(f"Unparented popup heuristic matched (size {w}x{h}) for 0x{window_id}; floating automatically")
+        if self._apply_window_actions(window_id, "", "", ["float", "center"]):
+            self.applied_rules[window_id] = signature
+            return True
+
+        return False
+
     def _handle_window_event(self, event: str) -> None:
         if event.startswith("windowtitle"):
             self._handle_title_event(event)
@@ -356,6 +609,7 @@ class Command:
         elif event.startswith("closewindow"):
             window_id = event.split(">>", 1)[-1].lstrip(">").split(",", 1)[0]
             self.applied_rules.pop(window_id, None)
+            self.window_initial_props.pop(window_id, None)
 
     def _handle_title_event(self, event: str) -> None:
         try:
@@ -375,6 +629,8 @@ class Command:
             window_info = self._get_window_info(window_id)
             if not window_info:
                 return
+
+            self._enhance_window_info(window_id, window_info)
 
             window_title = window_info.get("title", "")
             initial_title = window_info.get("initialTitle", "")
@@ -409,7 +665,7 @@ class Command:
 
             log(f"New window 0x{window_id} - Title: '{title}' | Class: '{window_class}'")
 
-            window_info = self._get_window_info(window_id)
+            window_info = self._get_window_info(window_id, retries=3)
             if not window_info:
                 window_info = {
                     "address": f"0x{window_id}",
@@ -417,27 +673,24 @@ class Command:
                     "initialTitle": title,
                     "class": window_class,
                     "initialClass": window_class,
-                    "workspace": {"name": workspace}
+                    "workspace": {"name": workspace},
+                    "size": [0, 0],
+                    "modal": False,
+                    "parent": "0x0",
+                    "xdg_toplevel_parent": "0x0",
                 }
+
+            self._record_initial_props(window_id, window_info, fallback_title=title, fallback_class=window_class)
+            self._enhance_window_info(window_id, window_info)
 
             if self._apply_matching_rule(window_id, window_info):
                 return
 
-            if window_info:
-                if self._apply_protocol_popup(window_id, window_info):
-                    return
+            if self._apply_protocol_popup(window_id, window_info):
+                return
 
-                size = window_info.get("size", [0, 0])
-                if self.enable_fallback_heuristic and isinstance(size, list) and len(size) == 2:
-                    w, h = size
-                    if w > 0 and h > 0:
-                        ratio = w / h
-                        if 200 <= w <= 1000 and 100 <= h <= 800 and 0.5 <= ratio <= 2.5:
-                            if self._is_rate_limited(window_id):
-                                return
-                            info(f"Fallback heuristic matched (size {w}x{h}) for 0x{window_id}. Floating automatically.")
-                            self._apply_window_actions(window_id, "", "", ["float", "center"])
-                            return
+            if self._apply_unparented_popup_heuristic(window_id, window_info):
+                return
 
         except (IndexError, ValueError) as e:
             warn(f"failed to parse window open event: {e}")

@@ -7,7 +7,6 @@
   libnotify,
   slurp,
   wl-clipboard,
-  cliphist,
   app2unit,
   dart-sass,
   grim,
@@ -45,7 +44,6 @@ python3.pkgs.buildPythonApplication {
       libnotify
       slurp
       wl-clipboard
-      cliphist
       app2unit
       dart-sass
       grim
