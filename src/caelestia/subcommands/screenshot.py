@@ -3,7 +3,7 @@ from argparse import Namespace
 from datetime import datetime
 
 from caelestia.utils import hypr
-from caelestia.utils.notify import notify
+from caelestia.utils.notify import ensure_binary, notify
 from caelestia.utils.paths import screenshots_cache_dir, screenshots_dir
 
 
@@ -21,10 +21,14 @@ class Command:
 
     def region(self) -> None:
         if self.args.region == "slurp":
+            if not ensure_binary("qs"):
+                return
             subprocess.run(
                 ["qs", "-c", "caelestia", "ipc", "call", "picker", "openFreeze" if self.args.freeze else "open"]
             )
         else:
+            if not (ensure_binary("grim") and ensure_binary("swappy")):
+                return
             sc_data = subprocess.check_output(["grim", "-l", "0", "-g", self.args.region.strip(), "-"])
             swappy = subprocess.Popen(["swappy", "-f", "-"], stdin=subprocess.PIPE, start_new_session=True)
 
@@ -34,6 +38,8 @@ class Command:
                 swappy.stdin.close()
 
     def fullscreen(self) -> None:
+        if not (ensure_binary("grim") and ensure_binary("wl-copy")):
+            return
         cmd = ["grim"]
         monitors = hypr.message("monitors")
         focused_monitor = hypr.focused_monitor(monitors)
@@ -62,7 +68,8 @@ class Command:
         )
 
         if action == "open":
-            subprocess.Popen(["swappy", "-f", dest], start_new_session=True)
+            if ensure_binary("swappy"):
+                subprocess.Popen(["swappy", "-f", dest], start_new_session=True)
         elif action == "save":
             new_dest = (screenshots_dir / dest.name).with_suffix(".png")
             new_dest.parent.mkdir(exist_ok=True, parents=True)

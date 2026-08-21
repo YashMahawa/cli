@@ -6,6 +6,7 @@ from collections import ChainMap
 from typing import Any, Callable, cast
 
 from caelestia.utils import hypr
+from caelestia.utils.notify import ensure_binary
 from caelestia.utils.paths import get_config
 
 
@@ -132,9 +133,11 @@ class Command:
                 hypr.dispatch("movetoworkspacesilent", f"special:{workspace},address:{client['address']}")
 
     def spawn_client(self, selector: Callable, spawn: list[str]) -> bool:
-        if (spawn[0].endswith(".desktop") or shutil.which(spawn[0])) and not any(
-            selector(client) for client in self.get_clients()
-        ):
+        if not spawn[0].endswith(".desktop") and not ensure_binary(spawn[0]):
+            return False
+        if not ensure_binary("app2unit"):
+            return False
+        if not any(selector(client) for client in self.get_clients()):
             hypr.dispatch("exec", f"[workspace special:{self.args.workspace}] app2unit -- {shlex.join(spawn)}")
             return True
         else:

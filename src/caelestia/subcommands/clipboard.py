@@ -2,6 +2,7 @@ import json
 import subprocess
 from argparse import Namespace
 
+from caelestia.utils.notify import ensure_binary
 from caelestia.utils.paths import c_state_dir
 
 
@@ -12,6 +13,9 @@ class Command:
         self.args = args
 
     def run(self) -> None:
+        if not ensure_binary("fuzzel"):
+            return
+
         history_file = c_state_dir / "clipboard-history.json"
         entries = []
         if history_file.is_file():

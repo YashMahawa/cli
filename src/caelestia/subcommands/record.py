@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from caelestia.utils import hypr
-from caelestia.utils.notify import close_notification, notify
+from caelestia.utils.notify import close_notification, ensure_binary, notify
 from caelestia.utils.paths import get_config, recording_notif_path, recording_path, recordings_dir
 
 RECORDER = "gpu-screen-recorder"
@@ -60,11 +60,15 @@ class Command:
         return a[0] < b[0] + b[2] and a[0] + a[2] > b[0] and a[1] < b[1] + b[3] and a[1] + a[3] > b[1]
 
     def start(self) -> None:
+        if not ensure_binary(RECORDER):
+            return
         args = ["-w"]
 
         monitors = hypr.message("monitors")
         if self.args.region:
             if self.args.region == "slurp":
+                if not ensure_binary("slurp"):
+                    return
                 region = subprocess.check_output(["slurp", "-f", "%wx%h+%x+%y"], text=True)
             else:
                 region = self.args.region.strip()
@@ -138,8 +142,9 @@ class Command:
             pass
 
         if self.args.clipboard:
-            file_uri = Path(new_path).resolve().as_uri() + "\n"
-            subprocess.run(["wl-copy", "--type", "text/uri-list"], input=file_uri.encode())
+            if ensure_binary("wl-copy"):
+                file_uri = Path(new_path).resolve().as_uri() + "\n"
+                subprocess.run(["wl-copy", "--type", "text/uri-list"], input=file_uri.encode())
 
         action = notify(
             "--action=watch=Watch",
