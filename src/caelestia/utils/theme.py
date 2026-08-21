@@ -128,30 +128,53 @@ def gen_sequences(colours: dict[str, str]) -> str:
 
 
 @log_exception
-def apply_terms(sequences: str) -> None:
+def apply_terms(sequences: str, timeout: float = 0.05) -> None:
     state = c_state_dir / "sequences.txt"
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(sequences)
 
     pts_path = Path("/dev/pts")
+    if not pts_path.exists() or not pts_path.is_dir():
+        return
+
+    data = sequences.encode("utf-8") if isinstance(sequences, str) else sequences
+    buf = memoryview(data)
+    total_len = len(buf)
+    if total_len == 0:
+        return
+
     for pt in pts_path.iterdir():
         if pt.name.isdigit():
             try:
                 fd = os.open(str(pt), os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
                 try:
-                    pending = memoryview(sequences.encode())
-                    deadline = time.monotonic() + 0.05
-                    while pending:
+                    offset = 0
+                    deadline = time.monotonic() + timeout
+                    while offset < total_len:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+
                         try:
-                            written = os.write(fd, pending)
-                            if written <= 0:
-                                break
-                            pending = pending[written:]
+                            written = os.write(fd, buf[offset:])
+                            if written > 0:
+                                offset += written
+                            elif written == 0:
+                                remaining = deadline - time.monotonic()
+                                if remaining <= 0:
+                                    break
+                                r, w, e = select.select([], [fd], [], remaining)
+                                if not w:
+                                    break
                         except BlockingIOError:
                             remaining = deadline - time.monotonic()
                             if remaining <= 0:
                                 break
-                            select.select([], [fd], [], remaining)
+                            r, w, e = select.select([], [fd], [], remaining)
+                            if not w:
+                                break
+                        except (OSError, IOError):
+                            break
                 finally:
                     os.close(fd)
             except (PermissionError, OSError):
@@ -432,7 +455,8 @@ def _high_priority_tasks(colours: dict[str, str], mode: str, cfg: dict) -> None:
     with ThreadPoolExecutor() as pool:
         futures = []
         if check("enableTerm"):
-            futures.append(pool.submit(apply_terms, gen_sequences(colours)))
+            term_timeout = float(cfg.get("termTimeout", 0.05))
+            futures.append(pool.submit(apply_terms, gen_sequences(colours), term_timeout))
         if check("enableHypr"):
             futures.append(pool.submit(apply_hypr, gen_lua(colours) if is_lua_config() else gen_conf(colours)))
         if check("enableFuzzel"):
