@@ -100,10 +100,40 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     # Create parser for display opts
     display_parser = command_parser.add_parser("display", help="interactive visual monitor manager controls")
     display_parser.set_defaults(cls=display.Command)
-    display_parser.add_argument("display_action", nargs="?", choices=["apply", "confirm", "rollback", "status", "profile"], help="display action to execute")
-    display_parser.add_argument("profile_action", nargs="?", choices=["list", "save", "load", "delete"], help="profile action")
-    display_parser.add_argument("name", nargs="?", help="profile or monitor name")
-    display_parser.add_argument("--monitors-json", help="JSON payload for monitor arrangements")
+    display_subparsers = display_parser.add_subparsers(dest="display_action", help="display action to execute")
+
+    # apply subcommand
+    apply_parser = display_subparsers.add_parser("apply", help="apply display configuration")
+    apply_parser.add_argument("token", nargs="?", help="apply confirmation token")
+    apply_parser.add_argument("--token", dest="token_opt", help="apply confirmation token")
+    apply_parser.add_argument("--monitors-json", help="JSON payload for monitor arrangements")
+
+    # confirm subcommand
+    confirm_parser = display_subparsers.add_parser("confirm", help="confirm display configuration")
+    confirm_parser.add_argument("token", nargs="?", help="confirmation token")
+    confirm_parser.add_argument("--token", dest="token_opt", help="confirmation token")
+
+    # rollback subcommand
+    rollback_parser = display_subparsers.add_parser("rollback", help="rollback display configuration")
+    rollback_parser.add_argument("token", nargs="?", help="rollback token")
+    rollback_parser.add_argument("--token", dest="token_opt", help="rollback token")
+
+    # status subcommand
+    display_subparsers.add_parser("status", help="show display status")
+
+    # profile subcommand
+    profile_parser = display_subparsers.add_parser("profile", help="manage display profiles")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_action", help="profile action")
+    profile_subparsers.add_parser("list", help="list saved profiles")
+
+    profile_save = profile_subparsers.add_parser("save", help="save current display profile")
+    profile_save.add_argument("name", help="profile name")
+
+    profile_load = profile_subparsers.add_parser("load", help="load a display profile")
+    profile_load.add_argument("name", help="profile name")
+
+    profile_delete = profile_subparsers.add_parser("delete", help="delete a display profile")
+    profile_delete.add_argument("name", help="profile name")
 
     # Create parser for emoji-picker opts
     emoji_parser = command_parser.add_parser("emoji", help="emoji/glyph utilities")
