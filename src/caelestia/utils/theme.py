@@ -229,14 +229,14 @@ def sync_papirus_colors(hex_color: str) -> None:
     except Exception:
         return
 
-    papirus_paths = [
-        Path("/usr/share/icons/Papirus"),
-        Path("/usr/share/icons/Papirus-Dark"),
+    user_papirus = [
         Path.home() / ".local/share/icons/Papirus",
         Path.home() / ".icons/Papirus",
+        Path.home() / ".local/share/icons/Papirus-Dark",
+        Path.home() / ".icons/Papirus-Dark",
     ]
 
-    if not any(p.exists() for p in papirus_paths):
+    if not any(p.exists() for p in user_papirus):
         return
 
     r = int(hex_color[0:2], 16)
@@ -266,14 +266,12 @@ def sync_papirus_colors(hex_color: str) -> None:
 
     # Runtime theming must never request administrative privileges. Only update
     # a user-owned Papirus installation; system-wide themes remain untouched.
-    user_papirus = [Path.home() / ".local/share/icons/Papirus", Path.home() / ".icons/Papirus"]
-    if any(path.exists() for path in user_papirus):
-        subprocess.Popen(
-            ["papirus-folders", "-C", color, "-u"],
-            stderr=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    subprocess.Popen(
+        ["papirus-folders", "-C", color, "-u"],
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def _determine_hue_color(r: int, g: int, b: int, brightness: int, use_pale: bool) -> str:
@@ -368,29 +366,56 @@ def apply_warp(colours: dict[str, str], mode: str) -> None:
 @log_exception
 def apply_chromium(colours: dict[str, str]) -> None:
     surface_hex = colours["surface"]
-    theme_color = f"#{surface_hex}"
-    browsers = [
-        ("chromium", Path("/etc/chromium/policies/managed")),
-        ("brave", Path("/etc/brave/policies/managed")),
-        ("google-chrome-stable", Path("/etc/opt/chrome/policies/managed")),
+    r = int(surface_hex[0:2], 16)
+    g = int(surface_hex[2:4], 16)
+    b = int(surface_hex[4:6], 16)
+    int_color = (255 << 24) | (r << 16) | (g << 8) | b
+    if int_color >= (1 << 31):
+        signed_int_color = int_color - (1 << 32)
+    else:
+        signed_int_color = int_color
+
+    browser_dirs = [
+        Path.home() / ".config/chromium",
+        Path.home() / ".config/BraveSoftware/Brave-Browser",
+        Path.home() / ".config/google-chrome",
+        Path.home() / ".config/google-chrome-beta",
+        Path.home() / ".config/google-chrome-unstable",
     ]
 
-    for cmd, policy_dir in browsers:
-        if shutil.which(cmd) is None:
-            continue
-        policy_file = policy_dir / "caelestia.json"
-        if not policy_dir.is_dir() or not os.access(policy_dir, os.W_OK):
+    for b_dir in browser_dirs:
+        if not b_dir.exists():
             continue
 
-        atomic_write(
-            policy_file,
-            json.dumps({"BrowserThemeColor": theme_color, "BrowserColorScheme": "device"}),
-        )
-        subprocess.run(
-            [cmd, "--refresh-platform-policy", "--no-startup-window"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        profile_dirs = [
+            d for d in b_dir.iterdir()
+            if d.is_dir() and (d.name == "Default" or d.name.startswith("Profile ") or (d / "Preferences").exists())
+        ]
+        if not profile_dirs and b_dir.is_dir():
+            profile_dirs = [b_dir / "Default"]
+
+        for profile_dir in profile_dirs:
+            pref_file = profile_dir / "Preferences"
+            prefs = {}
+            if pref_file.exists():
+                try:
+                    prefs = json.loads(pref_file.read_text(encoding="utf-8"))
+                except Exception:
+                    prefs = {}
+
+            if "browser" not in prefs or not isinstance(prefs["browser"], dict):
+                prefs["browser"] = {}
+            if "theme" not in prefs["browser"] or not isinstance(prefs["browser"]["theme"], dict):
+                prefs["browser"]["theme"] = {}
+
+            prefs["browser"]["theme"]["user_color"] = signed_int_color
+            prefs["browser"]["theme"]["custom_color"] = signed_int_color
+            prefs["browser"]["theme"]["autotheme_custom_color"] = signed_int_color
+            prefs["browser"]["theme"]["color_scheme"] = 0
+            prefs["browser"]["theme"]["color_variant"] = 1
+            prefs["browser"]["theme_color"] = signed_int_color
+
+            atomic_write(pref_file, json.dumps(prefs, indent=2))
 
 
 def apply_zed(colours: dict[str, str], mode: str) -> None:
