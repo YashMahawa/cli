@@ -98,61 +98,9 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     clipboard_parser.add_argument("-d", "--delete", action="store_true", help="delete from clipboard history")
 
     # Create parser for display opts
-    display_parser = command_parser.add_parser("display", help="interactive visual monitor manager controls")
+    display_parser = command_parser.add_parser("display", help="forward controls to authoritative display manager")
     display_parser.set_defaults(cls=display.Command)
-    display_subparsers = display_parser.add_subparsers(dest="display_action", help="display action to execute")
-
-    # apply subcommand
-    apply_parser = display_subparsers.add_parser("apply", help="apply display configuration")
-    apply_parser.add_argument("token", nargs="?", help="apply confirmation token")
-    apply_parser.add_argument("--token", dest="token_opt", help="apply confirmation token")
-    apply_parser.add_argument("--monitors-json", help="JSON payload for monitor arrangements")
-    apply_parser.add_argument("--name", help="Monitor name")
-    apply_parser.add_argument("--resolution", "--res", dest="res", help="Resolution e.g. 1920x1080@60")
-    apply_parser.add_argument("--position", "--pos", dest="pos", help="Position e.g. 0x0")
-    apply_parser.add_argument("--scale", help="Scale factor e.g. 1.25")
-    apply_parser.add_argument("--transform", help="Transform index 0-7")
-    apply_parser.add_argument("--old-res", help="Previous resolution")
-    apply_parser.add_argument("--old-pos", help="Previous position")
-    apply_parser.add_argument("--old-scale", help="Previous scale factor")
-
-    # mode subcommand
-    mode_parser = display_subparsers.add_parser("mode", help="set display mode preset")
-    mode_parser.add_argument(
-        "mode_name", choices=["extend", "join", "mirror", "external", "laptop"], help="display mode preset"
-    )
-
-    # confirm subcommand
-    confirm_parser = display_subparsers.add_parser("confirm", help="confirm display configuration")
-    confirm_parser.add_argument("token", nargs="?", help="confirmation token")
-    confirm_parser.add_argument("--token", dest="token_opt", help="confirmation token")
-
-    # rollback subcommand
-    rollback_parser = display_subparsers.add_parser("rollback", help="rollback display configuration")
-    rollback_parser.add_argument("token", nargs="?", help="rollback token")
-    rollback_parser.add_argument("--token", dest="token_opt", help="rollback token")
-
-    # status subcommand
-    display_subparsers.add_parser("status", help="show display status")
-
-    # move-window subcommand
-    move_parser = display_subparsers.add_parser("move-window", help="move active window to target display")
-    move_parser.add_argument("target", help="target monitor name")
-
-    # profile subcommand
-    profile_parser = display_subparsers.add_parser("profile", help="manage display profiles")
-    profile_subparsers = profile_parser.add_subparsers(dest="profile_action", help="profile action")
-    profile_subparsers.add_parser("list", help="list saved profiles")
-
-    profile_save = profile_subparsers.add_parser("save", help="save current display profile")
-    profile_save.add_argument("name", help="profile name")
-    profile_save.add_argument("--monitors-json", help="Monitors JSON for saving profile")
-
-    profile_load = profile_subparsers.add_parser("load", help="load a display profile")
-    profile_load.add_argument("name", help="profile name")
-
-    profile_delete = profile_subparsers.add_parser("delete", help="delete a display profile")
-    profile_delete.add_argument("name", help="profile name")
+    display_parser.add_argument("args", nargs=argparse.REMAINDER, help="arguments forwarded to caelestia-display")
 
     # Create parser for emoji-picker opts
     emoji_parser = command_parser.add_parser("emoji", help="emoji/glyph utilities")

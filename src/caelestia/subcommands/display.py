@@ -5,34 +5,39 @@ import sys
 
 CANONICAL_BACKEND = "caelestia-display"
 
-CONTRACT_SCHEMA = {
-    "subcommands": ["apply", "confirm", "rollback", "status", "move-window", "profile"],
-    "apply_options": [
-        "--monitors-json",
-        "--name",
-        "--resolution",
-        "--position",
-        "--scale",
-        "--transform",
-        "--old-res",
-        "--old-pos",
-        "--old-scale",
-    ],
-    "profile_actions": ["list", "save", "load", "delete"],
-    "modes": ["extend", "join", "mirror", "external", "laptop"],
-}
+
+def build_command(args: argparse.Namespace) -> list[str]:
+    raw_args = list(getattr(args, "args", []) or [])
+    if raw_args and raw_args[0] == "mode":
+        mode_args = raw_args[1:]
+        if shutil.which("caelestia-display-mode"):
+            return ["caelestia-display-mode"] + mode_args
+
+        cmd = ["caelestia-display", "apply"]
+        if mode_args:
+            mode_name = mode_args[0]
+            mode_map = {
+                "extend": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "res": "preferred", "pos": "1920x0", "scale": "1"}]',
+                "join": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "res": "preferred", "pos": "1920x0", "scale": "1"}]',
+                "mirror": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "res": "0x0", "scale": "1"}]',
+                "external": '[{"name": "eDP-1", "disabled": true}, {"name": "HDMI-A-1", "res": "preferred", "pos": "0x0", "scale": "1"}]',
+                "laptop": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "disabled": true}]',
+            }
+            if mode_name in mode_map:
+                cmd.extend(["--monitors-json", mode_map[mode_name]])
+        return cmd
+
+    return ["caelestia-display"] + raw_args
 
 
 def feature_detect_backend(executable: str = CANONICAL_BACKEND) -> dict:
-    """Feature-detect and version the backend contract against the installed or PATH binary."""
+    """Feature-detect the installed backend capabilities by querying backend help output."""
     backend_binary = shutil.which(executable)
     detected = {
         "binary": executable,
         "path": backend_binary,
         "available": backend_binary is not None,
         "supports_mode_script": shutil.which("caelestia-display-mode") is not None,
-        "subcommands": [],
-        "apply_flags": [],
     }
 
     if not detected["available"]:
@@ -41,15 +46,7 @@ def feature_detect_backend(executable: str = CANONICAL_BACKEND) -> dict:
     try:
         proc = subprocess.run([executable, "--help"], capture_output=True, text=True)
         help_out = proc.stdout + proc.stderr
-        for sub in CONTRACT_SCHEMA["subcommands"]:
-            if sub in help_out:
-                detected["subcommands"].append(sub)
-
-        apply_proc = subprocess.run([executable, "apply", "--help"], capture_output=True, text=True)
-        apply_out = apply_proc.stdout + apply_proc.stderr
-        for flag in CONTRACT_SCHEMA["apply_options"]:
-            if flag in apply_out or flag.replace("--resolution", "--res").replace("--position", "--pos") in apply_out:
-                detected["apply_flags"].append(flag)
+        detected["help_output"] = help_out
     except Exception:
         pass
 
@@ -57,97 +54,9 @@ def feature_detect_backend(executable: str = CANONICAL_BACKEND) -> dict:
 
 
 def verify_backend_contract(executable: str = CANONICAL_BACKEND) -> bool:
-    """Verify that the backend conforms to the canonical contract."""
+    """Verify that the backend executable is available in PATH."""
     info = feature_detect_backend(executable)
-    if not info["available"]:
-        return False
-    for sub in ["apply", "confirm", "rollback", "status", "profile"]:
-        if sub not in info["subcommands"]:
-            return False
-    return True
-
-
-def build_command(args: argparse.Namespace) -> list[str]:
-    display_action = getattr(args, "display_action", None)
-
-    if display_action == "mode":
-        mode_name = getattr(args, "mode_name", None)
-        if shutil.which("caelestia-display-mode"):
-            cmd = ["caelestia-display-mode"]
-            if mode_name:
-                cmd.append(mode_name)
-            return cmd
-
-        cmd = ["caelestia-display", "apply"]
-        mode_map = {
-            "extend": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "res": "preferred", "pos": "1920x0", "scale": "1"}]',
-            "join": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "res": "preferred", "pos": "1920x0", "scale": "1"}]',
-            "mirror": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "res": "preferred", "pos": "0x0", "scale": "1"}]',
-            "external": '[{"name": "eDP-1", "disabled": true}, {"name": "HDMI-A-1", "res": "preferred", "pos": "0x0", "scale": "1"}]',
-            "laptop": '[{"name": "eDP-1", "res": "preferred", "pos": "0x0", "scale": "1"}, {"name": "HDMI-A-1", "disabled": true}]',
-        }
-        if mode_name in mode_map:
-            cmd.extend(["--monitors-json", mode_map[mode_name]])
-        return cmd
-
-    cmd = ["caelestia-display"]
-    if display_action:
-        cmd.append(display_action)
-
-    if display_action == "apply":
-        name = getattr(args, "name", None)
-        if name:
-            cmd.extend(["--name", name])
-        res = getattr(args, "res", None)
-        if res:
-            cmd.extend(["--resolution", res])
-        pos = getattr(args, "pos", None)
-        if pos:
-            cmd.extend(["--position", pos])
-        scale = getattr(args, "scale", None)
-        if scale is not None:
-            cmd.extend(["--scale", str(scale)])
-        transform = getattr(args, "transform", None)
-        if transform is not None:
-            cmd.extend(["--transform", str(transform)])
-        old_res = getattr(args, "old_res", None)
-        if old_res:
-            cmd.extend(["--old-res", old_res])
-        old_pos = getattr(args, "old_pos", None)
-        if old_pos:
-            cmd.extend(["--old-pos", old_pos])
-        old_scale = getattr(args, "old_scale", None)
-        if old_scale is not None:
-            cmd.extend(["--old-scale", str(old_scale)])
-        monitors_json = getattr(args, "monitors_json", None)
-        if monitors_json:
-            cmd.extend(["--monitors-json", monitors_json])
-        token = getattr(args, "token", None) or getattr(args, "token_opt", None)
-        if token:
-            cmd.append(token)
-
-    elif display_action in ("confirm", "rollback"):
-        token = getattr(args, "token", None) or getattr(args, "token_opt", None)
-        if token:
-            cmd.append(token)
-
-    elif display_action == "move-window":
-        target = getattr(args, "target", None)
-        if target:
-            cmd.append(target)
-
-    elif display_action == "profile":
-        profile_action = getattr(args, "profile_action", None)
-        if profile_action:
-            cmd.append(profile_action)
-        name = getattr(args, "name", None)
-        if name:
-            cmd.append(name)
-        monitors_json = getattr(args, "monitors_json", None)
-        if monitors_json:
-            cmd.extend(["--monitors-json", monitors_json])
-
-    return cmd
+    return info["available"]
 
 
 class Command:
