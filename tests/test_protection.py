@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
-from caelestia.subcommands.toggle import Command as ToggleCommand
+from caelestia.subcommands.toggle import Command as ToggleCommand, validate_desktop_id
 from caelestia.utils.notify import ensure_binary, notify
 from caelestia.utils.dots.manifest import Manifest
 
@@ -52,6 +52,18 @@ def test_notify_dbus_fallback():
         assert any("org.freedesktop.Notifications" in arg for arg in args[0])
 
 
+def test_notify_dbus_fallback_options_and_actions():
+    with patch("shutil.which", return_value=None), patch("subprocess.run") as mock_run:
+        notify("-A", "open=Open", "-A", "save=Save", "-p", "Screenshot taken", "Saved to cache")
+        mock_run.assert_called_once()
+        cmd_args = mock_run.call_args[0][0]
+        assert cmd_args[0] == "gdbus"
+        # Summary (index 9), Body (index 10), Actions (index 11)
+        assert cmd_args[9] == "Screenshot taken"
+        assert cmd_args[10] == "Saved to cache"
+        assert cmd_args[11] == "['open', 'Open', 'save', 'Save']"
+
+
 def test_toggle_app2unit_optional_fallback():
     cmd = ToggleCommand(Namespace(workspace="sysmon"))
     cmd.get_clients = MagicMock(return_value=[])
@@ -69,6 +81,53 @@ def test_toggle_app2unit_optional_fallback():
         spawned = cmd.spawn_client(lambda c: False, ["foot"])
         assert spawned is True
         mock_dispatch.assert_called_once_with("exec", "[workspace special:sysmon] foot")
+
+
+def test_toggle_desktop_file_launchers():
+    cmd = ToggleCommand(Namespace(workspace="communication"))
+    cmd.get_clients = MagicMock(return_value=[])
+
+    # Case 1: app2unit available with valid desktop entry
+    with patch("caelestia.subcommands.toggle.validate_desktop_id", return_value=True), patch(
+        "shutil.which", side_effect=lambda x: "/usr/bin/app2unit" if x == "app2unit" else None
+    ), patch("caelestia.utils.hypr.dispatch") as mock_dispatch:
+        spawned = cmd.spawn_client(lambda c: False, ["spotify.desktop"])
+        assert spawned is True
+        mock_dispatch.assert_called_once_with("exec", "[workspace special:communication] app2unit -- spotify.desktop")
+
+    # Case 2: gtk-launch available when app2unit is absent
+    with patch("caelestia.subcommands.toggle.validate_desktop_id", return_value=True), patch(
+        "shutil.which", side_effect=lambda x: "/usr/bin/gtk-launch" if x == "gtk-launch" else None
+    ), patch("caelestia.utils.hypr.dispatch") as mock_dispatch:
+        spawned = cmd.spawn_client(lambda c: False, ["spotify.desktop"])
+        assert spawned is True
+        mock_dispatch.assert_called_once_with("exec", "[workspace special:communication] gtk-launch spotify")
+
+    # Case 3: gio launch available when app2unit and gtk-launch are absent
+    with patch("caelestia.subcommands.toggle.validate_desktop_id", return_value=True), patch(
+        "shutil.which", side_effect=lambda x: "/usr/bin/gio" if x == "gio" else None
+    ), patch("caelestia.utils.hypr.dispatch") as mock_dispatch:
+        spawned = cmd.spawn_client(lambda c: False, ["spotify.desktop"])
+        assert spawned is True
+        mock_dispatch.assert_called_once_with("exec", "[workspace special:communication] gio launch spotify.desktop")
+
+    # Case 4: No launcher available
+    with patch("caelestia.subcommands.toggle.validate_desktop_id", return_value=True), patch(
+        "shutil.which", return_value=None
+    ), patch("caelestia.subcommands.toggle.notify") as mock_notify:
+        spawned = cmd.spawn_client(lambda c: False, ["spotify.desktop"])
+        assert spawned is False
+        mock_notify.assert_called_once_with(
+            "Missing launcher", "No supported desktop launcher (app2unit, gtk-launch, or gio) is installed."
+        )
+
+    # Case 5: Invalid desktop ID
+    with patch("caelestia.subcommands.toggle.validate_desktop_id", return_value=False), patch(
+        "caelestia.subcommands.toggle.notify"
+    ) as mock_notify:
+        spawned = cmd.spawn_client(lambda c: False, ["nonexistent.desktop"])
+        assert spawned is False
+        mock_notify.assert_called_once_with("Missing desktop file", "Desktop entry 'nonexistent.desktop' not found.")
 
 
 def test_manifest_sync_with_pkgbuild():

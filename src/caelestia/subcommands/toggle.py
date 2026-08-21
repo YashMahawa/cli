@@ -1,13 +1,47 @@
 import json
+import os
 import shlex
 import shutil
 from argparse import Namespace
 from collections import ChainMap
+from pathlib import Path
 from typing import Any, Callable, cast
 
 from caelestia.utils import hypr
-from caelestia.utils.notify import ensure_binary
+from caelestia.utils.notify import ensure_binary, notify
 from caelestia.utils.paths import get_config
+
+
+def validate_desktop_id(desktop_id: str) -> bool:
+    path = Path(desktop_id)
+    if path.is_file():
+        return True
+
+    filename = path.name
+    if not filename.endswith(".desktop"):
+        filename += ".desktop"
+
+    dirs = [
+        Path.home() / ".local/share/applications",
+        Path("/usr/local/share/applications"),
+        Path("/usr/share/applications"),
+    ]
+
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        dirs.insert(0, Path(xdg_data_home) / "applications")
+
+    xdg_data_dirs = os.environ.get("XDG_DATA_DIRS")
+    if xdg_data_dirs:
+        for d in xdg_data_dirs.split(":"):
+            if d.strip():
+                dirs.append(Path(d.strip()) / "applications")
+
+    for d in dirs:
+        if (d / filename).is_file():
+            return True
+
+    return False
 
 
 def is_subset(superset, subset):
@@ -133,10 +167,35 @@ class Command:
                 hypr.dispatch("movetoworkspacesilent", f"special:{workspace},address:{client['address']}")
 
     def spawn_client(self, selector: Callable, spawn: list[str]) -> bool:
-        if not spawn[0].endswith(".desktop") and not ensure_binary(spawn[0]):
+        if not spawn:
             return False
+
+        if spawn[0].endswith(".desktop"):
+            if not validate_desktop_id(spawn[0]):
+                notify("Missing desktop file", f"Desktop entry '{spawn[0]}' not found.")
+                return False
+
+            if shutil.which("app2unit"):
+                cmd = f"app2unit -- {shlex.join(spawn)}"
+            elif shutil.which("gtk-launch"):
+                desktop_id = Path(spawn[0]).name
+                if desktop_id.endswith(".desktop"):
+                    desktop_id = desktop_id[:-8]
+                cmd = f"gtk-launch {shlex.join([desktop_id, *spawn[1:]])}"
+            elif shutil.which("gio"):
+                cmd = f"gio launch {shlex.join(spawn)}"
+            else:
+                notify("Missing launcher", "No supported desktop launcher (app2unit, gtk-launch, or gio) is installed.")
+                return False
+        else:
+            if not ensure_binary(spawn[0]):
+                return False
+            if shutil.which("app2unit"):
+                cmd = f"app2unit -- {shlex.join(spawn)}"
+            else:
+                cmd = shlex.join(spawn)
+
         if not any(selector(client) for client in self.get_clients()):
-            cmd = f"app2unit -- {shlex.join(spawn)}" if shutil.which("app2unit") else shlex.join(spawn)
             hypr.dispatch("exec", f"[workspace special:{self.args.workspace}] {cmd}")
             return True
         else:

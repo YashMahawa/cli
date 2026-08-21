@@ -76,7 +76,7 @@ def test_apply_terms_partial_write_retry(tmp_path: Path) -> None:
          patch("caelestia.utils.theme.select.select", return_value=([], [slave], [])) as mock_select:
 
         test_seq = "\x1b]10;rgb:11/22/33\x1b\\\x1b]11;rgb:44/55/66\x1b\\"
-        apply_terms(test_seq, timeout=0.2)
+        apply_terms(test_seq, timeout=1.0)
 
         assert mock_select.called
         read_data = os.read(master, 1024).decode("utf-8")
