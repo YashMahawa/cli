@@ -3,6 +3,7 @@ import sys
 
 from caelestia.subcommands import (
     clipboard,
+    display,
     emoji,
     install,
     record,
@@ -95,6 +96,14 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     clipboard_parser = command_parser.add_parser("clipboard", help="open clipboard history")
     clipboard_parser.set_defaults(cls=clipboard.Command)
     clipboard_parser.add_argument("-d", "--delete", action="store_true", help="delete from clipboard history")
+
+    # Create parser for display opts
+    display_parser = command_parser.add_parser("display", help="interactive visual monitor manager controls")
+    display_parser.set_defaults(cls=display.Command)
+    display_parser.add_argument("display_action", nargs="?", choices=["apply", "confirm", "rollback", "status", "profile"], help="display action to execute")
+    display_parser.add_argument("profile_action", nargs="?", choices=["list", "save", "load", "delete"], help="profile action")
+    display_parser.add_argument("name", nargs="?", help="profile or monitor name")
+    display_parser.add_argument("--monitors-json", help="JSON payload for monitor arrangements")
 
     # Create parser for emoji-picker opts
     emoji_parser = command_parser.add_parser("emoji", help="emoji/glyph utilities")
