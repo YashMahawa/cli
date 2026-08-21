@@ -19,6 +19,7 @@ from caelestia.utils.hypr import is_lua_config
 from caelestia.utils.io import log_exception
 from caelestia.utils.paths import (
     atomic_write,
+    c_data_dir,
     c_state_dir,
     config_dir,
     data_dir,
@@ -386,114 +387,37 @@ def apply_warp(colours: dict[str, str], mode: str) -> None:
     atomic_write(data_dir / "warp-terminal/themes/caelestia.yaml", template)
 
 
-def _is_chromium_profile_active(profile_dir: Path, b_dir: Path) -> bool:
-    """Return True if a browser process appears to be actively using the given profile or browser directory."""
-    for lock_path in (profile_dir / "SingletonLock", b_dir / "SingletonLock"):
-        if lock_path.is_symlink() or lock_path.exists():
-            try:
-                if lock_path.is_symlink():
-                    target = os.readlink(lock_path)
-                    pid_str = target.rpartition("-")[2]
-                    if pid_str.isdigit():
-                        os.kill(int(pid_str), 0)
-                        return True
-                return True
-            except (OSError, ValueError):
-                pass
-
-    b_name = b_dir.name.lower()
-    proc_map = {
-        "chromium": ["chromium", "chromium-freeworld"],
-        "brave": ["brave", "brave-browser"],
-        "chrome": ["chrome", "google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-unstable"],
-    }
-    procs_to_check = []
-    for key, procs in proc_map.items():
-        if key in b_name or key.replace("-", "") in b_name.replace("-", ""):
-            procs_to_check.extend(procs)
-
-    if procs_to_check and shutil.which("pgrep"):
-        for proc in procs_to_check:
-            try:
-                res = subprocess.run(["pgrep", "-x", proc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if res.returncode == 0:
-                    return True
-            except OSError:
-                pass
-
-    return False
-
-
 @log_exception
 def apply_chromium(colours: dict[str, str]) -> None:
     surface_hex = colours["surface"]
     r = int(surface_hex[0:2], 16)
     g = int(surface_hex[2:4], 16)
     b = int(surface_hex[4:6], 16)
-    int_color = (255 << 24) | (r << 16) | (g << 8) | b
-    if int_color >= (1 << 31):
-        signed_int_color = int_color - (1 << 32)
-    else:
-        signed_int_color = int_color
 
-    browser_dirs = [
-        Path.home() / ".config/chromium",
-        Path.home() / ".config/BraveSoftware/Brave-Browser",
-        Path.home() / ".config/google-chrome",
-        Path.home() / ".config/google-chrome-beta",
-        Path.home() / ".config/google-chrome-unstable",
-    ]
+    text_hex = colours.get("on_surface", "ffffff")
+    tr = int(text_hex[0:2], 16)
+    tg = int(text_hex[2:4], 16)
+    tb = int(text_hex[4:6], 16)
 
-    for b_dir in browser_dirs:
-        if not b_dir.exists():
-            continue
+    manifest = {
+        "manifest_version": 3,
+        "name": "Caelestia Dynamic Theme",
+        "version": "1.0",
+        "description": "Generated user-space theme for Chromium browsers",
+        "theme": {
+            "colors": {
+                "frame": [r, g, b],
+                "toolbar": [r, g, b],
+                "ntp_background": [r, g, b],
+                "ntp_text": [tr, tg, tb],
+                "tab_text": [tr, tg, tb],
+                "tab_background_text": [tr, tg, tb],
+            }
+        },
+    }
 
-        profile_dirs = [
-            d for d in b_dir.iterdir()
-            if d.is_dir() and (d.name == "Default" or d.name.startswith("Profile ") or (d / "Preferences").exists())
-        ]
-        if not profile_dirs and b_dir.is_dir():
-            profile_dirs = [b_dir / "Default"]
-
-        for profile_dir in profile_dirs:
-            if _is_chromium_profile_active(profile_dir, b_dir):
-                warn(f"Skipping active Chromium profile preferences rewrite: {profile_dir}")
-                continue
-
-            pref_file = profile_dir / "Preferences"
-            prefs = {}
-            if pref_file.exists():
-                try:
-                    raw_text = pref_file.read_text(encoding="utf-8")
-                    parsed = json.loads(raw_text)
-                    if isinstance(parsed, dict):
-                        prefs = parsed
-                    else:
-                        warn(f"Skipping Chromium preferences update for {pref_file}: content is not a JSON object")
-                        continue
-                except Exception as e:
-                    warn(f"Skipping Chromium preferences update for {pref_file}: malformed or unreadable JSON ({e})")
-                    continue
-
-                backup_file = profile_dir / "Preferences.bak"
-                try:
-                    shutil.copy2(pref_file, backup_file)
-                except OSError as e:
-                    warn(f"Failed to create backup for {pref_file}: {e}")
-
-            if "browser" not in prefs or not isinstance(prefs["browser"], dict):
-                prefs["browser"] = {}
-            if "theme" not in prefs["browser"] or not isinstance(prefs["browser"]["theme"], dict):
-                prefs["browser"]["theme"] = {}
-
-            prefs["browser"]["theme"]["user_color"] = signed_int_color
-            prefs["browser"]["theme"]["custom_color"] = signed_int_color
-            prefs["browser"]["theme"]["autotheme_custom_color"] = signed_int_color
-            prefs["browser"]["theme"]["color_scheme"] = 0
-            prefs["browser"]["theme"]["color_variant"] = 1
-            prefs["browser"]["theme_color"] = signed_int_color
-
-            atomic_write(pref_file, json.dumps(prefs, indent=2))
+    theme_asset_path = c_data_dir / "chromium/manifest.json"
+    atomic_write(theme_asset_path, json.dumps(manifest, indent=2))
 
 
 def apply_zed(colours: dict[str, str], mode: str) -> None:
