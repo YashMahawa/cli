@@ -26,6 +26,26 @@ from caelestia.utils.paths import (
 )
 
 
+CONFLICTING_POWER_MANAGERS = ("tlp", "tuned", "auto-cpufreq", "cpupower", "system76-power", "slimbookdaemon")
+
+
+def _get_active_power_manager() -> str | None:
+    """Return the name of an active conflicting power manager service, if any."""
+    for manager in CONFLICTING_POWER_MANAGERS:
+        for name in (manager, f"{manager}.service"):
+            try:
+                res = subprocess.run(
+                    ["systemctl", "is-active", "--quiet", name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if res.returncode == 0:
+                    return name
+            except Exception:
+                pass
+    return None
+
+
 def _parse_list_arg(value: str | None) -> list[str] | None:
     if value is None:
         return None
@@ -292,22 +312,26 @@ class Command:
         info("Enjoy! For support (or to just hang out), join our Discord server: https://discord.gg/BGDCFCmMBk")
 
     def enable_power_services(self) -> None:
-        """Enable and start UPower and Power Profiles Daemon services on systemd systems if elevated."""
-        if not Path("/run/systemd/system").exists():
+        """Enable and start power-profiles-daemon service on systemd systems if explicitly requested."""
+        if not getattr(self.args, "enable_power_profiles_daemon", False):
             return
 
-        services = ["upower.service", "power-profiles-daemon.service"]
+        if not Path("/run/systemd/system").exists():
+            raise RuntimeError("Systemd is not running; cannot enable power-profiles-daemon.")
+
+        active_mgr = _get_active_power_manager()
+        if active_mgr:
+            info(f"Preserving existing power manager: {active_mgr}")
+            return
+
         cmd = []
         if os.geteuid() == 0:
-            cmd = ["systemctl", "enable", "--now", *services]
+            cmd = ["systemctl", "enable", "--now", "power-profiles-daemon.service"]
         elif shutil.which("sudo"):
-            cmd = ["sudo", "systemctl", "enable", "--now", *services]
+            cmd = ["sudo", "systemctl", "enable", "--now", "power-profiles-daemon.service"]
         else:
-            return
+            raise RuntimeError("Root or sudo privileges are required to enable power-profiles-daemon.")
 
-        log("Enabling power management services...")
-        try:
-            subprocess.run(cmd, check=True)
-            info("Enabled and started power management services.")
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            warn(f"failed to enable power management services: {e}")
+        log("Enabling power-profiles-daemon service...")
+        subprocess.run(cmd, check=True)
+        info("Enabled and started power-profiles-daemon service.")
