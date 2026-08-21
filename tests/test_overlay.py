@@ -202,3 +202,50 @@ class TestOverlayCommand(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         mock_error.assert_called_once()
         self.assertIn("Incompatible overlay service version", mock_error.call_args[0][0])
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_compatibility_legacy_service_unknown_method(self, mock_run):
+        mock_run.return_value = self._make_proc(
+            returncode=1,
+            stdout='{"error": "unknown_method", "message": "Unknown method: version"}'
+        )
+        args = Namespace(overlay_action="list")
+        cmd = Command(args)
+
+        # Legacy service without version endpoint returns unknown method
+        # check_compatibility should return True (supported legacy service)
+        self.assertTrue(cmd.check_compatibility())
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_compatibility_service_not_running_genuine_failure(self, mock_run):
+        mock_run.return_value = self._make_proc(
+            returncode=1,
+            stdout='{"error": "missing_shell", "message": "Shell service unavailable"}'
+        )
+        args = Namespace(overlay_action="list")
+        cmd = Command(args)
+
+        # Genuine IPC failure during check_compatibility should NOT be swallowed
+        with patch("caelestia.subcommands.overlay.error") as mock_error, self.assertRaises(SystemExit) as ctx:
+            cmd.check_compatibility()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_error.assert_called_once()
+        self.assertIn("Shell overlay service is not running", mock_error.call_args[0][0])
+
+    @patch("caelestia.subcommands.overlay.subprocess.run")
+    def test_real_command_execution_with_legacy_service(self, mock_run):
+        # First call is check_compatibility -> version -> unknown_method
+        # Second call is register -> success
+        mock_run.side_effect = [
+            self._make_proc(returncode=1, stdout='{"error": "unknown_method", "message": "Unknown method: version"}'),
+            self._make_proc(returncode=0, stdout='{"success": true}')
+        ]
+        args = Namespace(overlay_action="register", window="active", anchor="top-left", pin=True, clickthrough=False)
+        cmd = Command(args)
+
+        with patch("builtins.print") as mock_print:
+            # cmd.run() executes without patching check_compatibility
+            cmd.run()
+            self.assertEqual(mock_run.call_count, 2)
+            mock_print.assert_called_once_with('{"success": true}')
+
