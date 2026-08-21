@@ -1,5 +1,7 @@
+import os
 import shutil
 import stat
+import subprocess
 import textwrap
 from argparse import Namespace
 from pathlib import Path
@@ -83,6 +85,7 @@ class Command:
         self.dereference_legacy(legacy_dir)  # Copy legacy content into place before deploy overwrites the symlinks
         deployed = self.deploy_configs(source, manifest)
         run_hooks(manifest, "post_install")
+        self.enable_power_services()
 
         DotsState(
             aur_helper=getattr(installer, "helper", DEFAULT_AUR_HELPER),
@@ -287,3 +290,24 @@ class Command:
         info("  - Edit `~/.config/caelestia/hypr-user.conf` to set your monitor layout and other Hyprland configs")
         info("  - Run `caelestia update` later to pull in the latest changes")
         info("Enjoy! For support (or to just hang out), join our Discord server: https://discord.gg/BGDCFCmMBk")
+
+    def enable_power_services(self) -> None:
+        """Enable and start UPower and Power Profiles Daemon services on systemd systems if elevated."""
+        if not Path("/run/systemd/system").exists():
+            return
+
+        services = ["upower.service", "power-profiles-daemon.service"]
+        cmd = []
+        if os.geteuid() == 0:
+            cmd = ["systemctl", "enable", "--now", *services]
+        elif shutil.which("sudo"):
+            cmd = ["sudo", "systemctl", "enable", "--now", *services]
+        else:
+            return
+
+        log("Enabling power management services...")
+        try:
+            subprocess.run(cmd, check=True)
+            info("Enabled and started power management services.")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            warn(f"failed to enable power management services: {e}")

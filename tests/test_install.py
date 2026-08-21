@@ -2,9 +2,11 @@ import os
 import socket
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from caelestia.subcommands.install import _ignore_transient_nodes
+from caelestia.subcommands.install import Command, _ignore_transient_nodes
 from caelestia.utils.dots.deployer import Deployer
 
 
@@ -38,6 +40,47 @@ class TestInstallSafety(unittest.TestCase):
 
             self.assertFalse(destination.is_symlink())
             self.assertEqual(destination.read_text(), "first")
+
+    @patch("caelestia.subcommands.install.subprocess.run")
+    @patch("caelestia.subcommands.install.Path.exists")
+    def test_enable_power_services_skipped_when_not_systemd(
+        self, mock_exists: MagicMock, mock_run: MagicMock
+    ) -> None:
+        mock_exists.return_value = False
+        cmd = Command(Namespace())
+        cmd.enable_power_services()
+        mock_run.assert_not_called()
+
+    @patch("caelestia.subcommands.install.subprocess.run")
+    @patch("caelestia.subcommands.install.os.geteuid", return_value=0)
+    @patch("caelestia.subcommands.install.Path.exists", return_value=True)
+    def test_enable_power_services_root(
+        self, mock_exists: MagicMock, mock_geteuid: MagicMock, mock_run: MagicMock
+    ) -> None:
+        cmd = Command(Namespace())
+        cmd.enable_power_services()
+        mock_run.assert_called_once_with(
+            ["systemctl", "enable", "--now", "upower.service", "power-profiles-daemon.service"],
+            check=True,
+        )
+
+    @patch("caelestia.subcommands.install.subprocess.run")
+    @patch("caelestia.subcommands.install.shutil.which", return_value="/usr/bin/sudo")
+    @patch("caelestia.subcommands.install.os.geteuid", return_value=1000)
+    @patch("caelestia.subcommands.install.Path.exists", return_value=True)
+    def test_enable_power_services_sudo(
+        self,
+        mock_exists: MagicMock,
+        mock_geteuid: MagicMock,
+        mock_which: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        cmd = Command(Namespace())
+        cmd.enable_power_services()
+        mock_run.assert_called_once_with(
+            ["sudo", "systemctl", "enable", "--now", "upower.service", "power-profiles-daemon.service"],
+            check=True,
+        )
 
 
 if __name__ == "__main__":
