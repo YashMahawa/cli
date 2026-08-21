@@ -130,11 +130,15 @@ def test_apply_terms_handles_inaccessible_pts(tmp_path: Path) -> None:
 
 def test_apply_chromium_user_space_theme_asset(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
+    config_dir = tmp_path / "config"
     monkeypatch.setattr("caelestia.utils.theme.c_data_dir", data_dir / "caelestia")
+    monkeypatch.setattr("caelestia.utils.theme.config_dir", config_dir)
 
     # Create dummy browser directory and Preferences file to verify it is NOT mutated
-    pref_file = tmp_path / "home/.config/chromium/Default/Preferences"
-    pref_file.parent.mkdir(parents=True)
+    chrom_dir = config_dir / "chromium"
+    default_dir = chrom_dir / "Default"
+    default_dir.mkdir(parents=True)
+    pref_file = default_dir / "Preferences"
     initial_pref_content = '{"browser": {}}'
     pref_file.write_text(initial_pref_content)
 
@@ -148,9 +152,15 @@ def test_apply_chromium_user_space_theme_asset(tmp_path, monkeypatch):
     assert manifest["manifest_version"] == 3
     assert manifest["theme"]["colors"]["frame"] == [26, 28, 30]
 
+    # Verify External Extensions registration
+    ext_file = chrom_dir / "External Extensions/caelebacdefghijklmnopabcdefghijkl.json"
+    assert ext_file.exists()
+    ext_data = json.loads(ext_file.read_text())
+    assert ext_data["external_unpacked"] == str((data_dir / "caelestia/chromium").resolve())
+
     # Verify browser profile Preferences was NOT mutated or backed up
     assert pref_file.read_text() == initial_pref_content
-    assert not (pref_file.parent / "Preferences.bak").exists()
+    assert not (default_dir / "Preferences.bak").exists()
 
 
 def test_package_installer_no_packages_path():

@@ -387,6 +387,9 @@ def apply_warp(colours: dict[str, str], mode: str) -> None:
     atomic_write(data_dir / "warp-terminal/themes/caelestia.yaml", template)
 
 
+CHROMIUM_EXTENSION_ID = "caelebacdefghijklmnopabcdefghijkl"
+
+
 @log_exception
 def apply_chromium(colours: dict[str, str]) -> None:
     surface_hex = colours["surface"]
@@ -416,8 +419,49 @@ def apply_chromium(colours: dict[str, str]) -> None:
         },
     }
 
-    theme_asset_path = c_data_dir / "chromium/manifest.json"
+    theme_asset_dir = c_data_dir / "chromium"
+    theme_asset_path = theme_asset_dir / "manifest.json"
     atomic_write(theme_asset_path, json.dumps(manifest, indent=2))
+
+    # Register unpacked extension in user-space browser configuration directories
+    browser_config_dirs = [
+        config_dir / "chromium",
+        config_dir / "BraveSoftware/Brave-Browser",
+        config_dir / "google-chrome",
+        config_dir / "google-chrome-beta",
+        config_dir / "google-chrome-unstable",
+        config_dir / "chromium-beta",
+    ]
+
+    ext_payload = json.dumps({"external_unpacked": str(theme_asset_dir.resolve())}, indent=2)
+
+    for b_dir in browser_config_dirs:
+        if b_dir.exists():
+            ext_dir = b_dir / "External Extensions"
+            ext_file = ext_dir / f"{CHROMIUM_EXTENSION_ID}.json"
+            atomic_write(ext_file, ext_payload)
+
+    # Optional: Update managed policies if accessible without root elevation
+    theme_color = f"#{surface_hex}"
+    browsers = [
+        ("chromium", Path("/etc/chromium/policies/managed")),
+        ("brave", Path("/etc/brave/policies/managed")),
+        ("google-chrome-stable", Path("/etc/opt/chrome/policies/managed")),
+    ]
+
+    for cmd, policy_dir in browsers:
+        if policy_dir.is_dir() and os.access(policy_dir, os.W_OK):
+            policy_file = policy_dir / "caelestia.json"
+            atomic_write(
+                policy_file,
+                json.dumps({"BrowserThemeColor": theme_color, "BrowserColorScheme": "device"}),
+            )
+            if shutil.which(cmd):
+                subprocess.run(
+                    [cmd, "--refresh-platform-policy", "--no-startup-window"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
 
 
 def apply_zed(colours: dict[str, str], mode: str) -> None:

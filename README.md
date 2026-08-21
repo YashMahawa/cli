@@ -102,7 +102,7 @@ installed. Caelestia runs `papirus-folders` in user-space against your local ico
 
 #### Chromium-based browser theming
 
-Chromium-based browser theming (Brave, Chromium, Google Chrome) generates user theme assets in user-space (`~/.local/share/caelestia/chromium/manifest.json`) without mutating browser profile Preferences or requiring administrator privileges.
+Chromium-based browser theming (Brave, Chromium, Google Chrome) generates user theme assets in user-space (`~/.local/share/caelestia/chromium/manifest.json`) and registers the theme via `External Extensions` descriptors (`~/.config/<browser>/External Extensions/caelebacdefghijklmnopabcdefghijkl.json`) so browsers automatically load the dynamic theme without mutating browser profile Preferences or requiring administrator privileges.
 
 #### User-space / non-root installation
 
