@@ -1,5 +1,7 @@
+import os
 import shutil
 import stat
+import subprocess
 import textwrap
 from argparse import Namespace
 from pathlib import Path
@@ -22,6 +24,26 @@ from caelestia.utils.paths import (
     config_backup_dir,
     config_dir,
 )
+
+
+CONFLICTING_POWER_MANAGERS = ("tlp", "tuned", "auto-cpufreq", "cpupower", "system76-power", "slimbookdaemon")
+
+
+def _get_active_power_manager() -> str | None:
+    """Return the name of an active conflicting power manager service, if any."""
+    for manager in CONFLICTING_POWER_MANAGERS:
+        for name in (manager, f"{manager}.service"):
+            try:
+                res = subprocess.run(
+                    ["systemctl", "is-active", "--quiet", name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                if res.returncode == 0:
+                    return name
+            except Exception:
+                pass
+    return None
 
 
 def _parse_list_arg(value: str | None) -> list[str] | None:
@@ -83,6 +105,7 @@ class Command:
         self.dereference_legacy(legacy_dir)  # Copy legacy content into place before deploy overwrites the symlinks
         deployed = self.deploy_configs(source, manifest)
         run_hooks(manifest, "post_install")
+        self.enable_power_services()
 
         DotsState(
             aur_helper=getattr(installer, "helper", DEFAULT_AUR_HELPER),
@@ -287,3 +310,28 @@ class Command:
         info("  - Edit `~/.config/caelestia/hypr-user.conf` to set your monitor layout and other Hyprland configs")
         info("  - Run `caelestia update` later to pull in the latest changes")
         info("Enjoy! For support (or to just hang out), join our Discord server: https://discord.gg/BGDCFCmMBk")
+
+    def enable_power_services(self) -> None:
+        """Enable and start power-profiles-daemon service on systemd systems if explicitly requested."""
+        if not getattr(self.args, "enable_power_profiles_daemon", False):
+            return
+
+        if not Path("/run/systemd/system").exists():
+            raise RuntimeError("Systemd is not running; cannot enable power-profiles-daemon.")
+
+        active_mgr = _get_active_power_manager()
+        if active_mgr:
+            info(f"Preserving existing power manager: {active_mgr}")
+            return
+
+        cmd = []
+        if os.geteuid() == 0:
+            cmd = ["systemctl", "enable", "--now", "power-profiles-daemon.service"]
+        elif shutil.which("sudo"):
+            cmd = ["sudo", "systemctl", "enable", "--now", "power-profiles-daemon.service"]
+        else:
+            raise RuntimeError("Root or sudo privileges are required to enable power-profiles-daemon.")
+
+        log("Enabling power-profiles-daemon service...")
+        subprocess.run(cmd, check=True)
+        info("Enabled and started power-profiles-daemon service.")

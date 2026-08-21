@@ -167,6 +167,13 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     install_parser.add_argument(
         "--disable-components", metavar="LIST", help="comma-separated list of components to disable"
     )
+    install_parser.add_argument(
+        "--enable-power-profiles-daemon",
+        "--enable-ppd",
+        action="store_true",
+        dest="enable_power_profiles_daemon",
+        help="enable and start power-profiles-daemon service",
+    )
     install_parser.add_argument("--noconfirm", action="store_true", help="use defaults for all prompts")
     _set_install_epilog(install_parser)
 
