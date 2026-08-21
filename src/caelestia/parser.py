@@ -5,7 +5,6 @@ from caelestia.subcommands import (
     clipboard,
     emoji,
     install,
-    overlay,
     record,
     resizer,
     scheme,
@@ -153,49 +152,6 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
         metavar="RULE",
         help="match criteria in the format key[:predicate]=value (e.g., class=Gimp, title:regex=^Foo)",
     )
-
-    # Create parser for overlay opts
-    overlay_parser = command_parser.add_parser("overlay", help="manage overlay companion windows")
-    overlay_parser.set_defaults(cls=overlay.Command)
-    overlay_subparsers = overlay_parser.add_subparsers(title="overlay actions", dest="overlay_action")
-
-    # register / float
-    reg_parser = overlay_subparsers.add_parser("register", aliases=["float", "add"], help="convert targeted window into a floating companion overlay")
-    reg_parser.add_argument("window", nargs="?", default="active", help="window identifier (address, class, or 'active')")
-    reg_parser.add_argument("-a", "--anchor", choices=["top-left", "top-right", "bottom-left", "bottom-right", "top", "bottom", "left", "right", "center"], help="anchor position")
-    reg_parser.add_argument("-p", "--pin", action="store_true", help="pin overlay across workspaces")
-    reg_parser.add_argument("-c", "--clickthrough", action="store_true", help="enable click-through input mode")
-
-    # unregister / restore
-    unreg_parser = overlay_subparsers.add_parser("unregister", aliases=["remove", "unfloat", "unoverlay", "restore"], help="restore overlay window to tiled layout")
-    unreg_parser.add_argument("window", nargs="?", default="active", help="window identifier")
-
-    # anchor
-    anc_parser = overlay_subparsers.add_parser("anchor", help="anchor overlay to screen edge or corner")
-    anc_parser.add_argument("position", choices=["top-left", "top-right", "bottom-left", "bottom-right", "top", "bottom", "left", "right", "center"], help="screen anchor position")
-    anc_parser.add_argument("window", nargs="?", default="active", help="window identifier")
-    anc_parser.add_argument("-m", "--margin", default="10", help="margin in pixels")
-
-    # pin
-    pin_parser = overlay_subparsers.add_parser("pin", help="pin or unpin overlay across workspaces")
-    pin_parser.add_argument("window", nargs="?", default="active", help="window identifier")
-    pin_group = pin_parser.add_mutually_exclusive_group()
-    pin_group.add_argument("--enable", action="store_true", help="enable pinning")
-    pin_group.add_argument("--disable", action="store_true", help="disable pinning")
-
-    # clickthrough
-    ct_parser = overlay_subparsers.add_parser("clickthrough", aliases=["passthrough"], help="toggle or set click-through input mode")
-    ct_parser.add_argument("window", nargs="?", default="active", help="window identifier")
-    ct_group = ct_parser.add_mutually_exclusive_group()
-    ct_group.add_argument("--enable", action="store_true", help="enable click-through mode")
-    ct_group.add_argument("--disable", action="store_true", help="disable click-through mode")
-
-    # toggle
-    tog_parser = overlay_subparsers.add_parser("toggle", help="toggle overlay mode on window")
-    tog_parser.add_argument("window", nargs="?", default="active", help="window identifier")
-
-    # list
-    list_p = overlay_subparsers.add_parser("list", aliases=["get", "status"], help="list registered overlay windows")
 
     # Create parser for install opts
     install_parser = command_parser.add_parser(
