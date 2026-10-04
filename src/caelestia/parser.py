@@ -89,6 +89,12 @@ def parse_args() -> tuple[argparse.ArgumentParser, argparse.Namespace]:
     record_parser.set_defaults(cls=record.Command)
     record_parser.add_argument("-r", "--region", nargs="?", const="slurp", help="record a region")
     record_parser.add_argument("-s", "--sound", action="store_true", help="record audio")
+    record_parser.add_argument(
+        "-a",
+        "--audio",
+        choices=["none", "system", "mic", "both"],
+        help="audio to record: system output, microphone, or both mixed (default: none, or system with -s)",
+    )
     record_parser.add_argument("-p", "--pause", action="store_true", help="pause/resume the recording")
     record_parser.add_argument("-c", "--clipboard", action="store_true", help="copy recording path to clipboard")
 

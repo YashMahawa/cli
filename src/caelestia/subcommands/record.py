@@ -93,8 +93,15 @@ class Command:
                 return
             args += [focused_monitor["name"], "-f", str(monitor_refresh_rate(focused_monitor))]
 
-        if self.args.sound:
-            args += ["-a", "default_output"]
+        audio = getattr(self.args, "audio", None) or ("system" if self.args.sound else "none")
+        sources = {
+            "system": "default_output",
+            "mic": "default_input",
+            # One mixed track, so players and editors get both without setup.
+            "both": "default_output|default_input",
+        }
+        if audio in sources:
+            args += ["-a", sources[audio]]
 
         config = get_config()
         try:

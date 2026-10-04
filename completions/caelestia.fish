@@ -108,6 +108,7 @@ complete -c caelestia -n "$seen screenshot" -s 'f' -l 'freeze' -d 'Freeze while 
 # Record
 complete -c caelestia -n "$seen record" -s 'r' -l 'region' -d 'Capture region'
 complete -c caelestia -n "$seen record" -s 's' -l 'sound' -d 'Capture sound'
+complete -c caelestia -n "$seen record" -s 'a' -l 'audio' -r -f -a 'none system mic both' -d 'Audio to record'
 complete -c caelestia -n "$seen record" -s 'c' -l 'clipboard' -d 'Copy recording path to clipboard'
 
 # Clipboard
