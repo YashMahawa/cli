@@ -11,6 +11,33 @@ from caelestia.utils.notify import close_notification, notify
 from caelestia.utils.paths import get_config, recording_notif_path, recording_path, recordings_dir
 
 RECORDER = "gpu-screen-recorder"
+
+_STOPPED_NOTIF_HANDLER = r"""
+path=$1
+uri=$2
+directory=$3
+
+action=$(notify-send -a caelestia-cli \
+    --action=watch=Watch \
+    --action=open=Open \
+    --action=delete=Delete \
+    "Recording stopped" \
+    "Recording saved in $path") || exit 0
+
+case "$action" in
+    watch)
+        exec app2unit -O "$path"
+        ;;
+    open)
+        dbus-send --session --dest=org.freedesktop.FileManager1 --type=method_call \
+            /org/freedesktop/FileManager1 org.freedesktop.FileManager1.ShowItems \
+            "array:string:$uri" "string:" || exec app2unit -O "$directory"
+        ;;
+    delete)
+        rm -f -- "$path"
+        ;;
+esac
+"""
 QUALITY_DEFAULTS = (
     ("-k", "hevc"),
     ("-encoder", "gpu"),
@@ -154,30 +181,13 @@ class Command:
             file_uri = Path(new_path).resolve().as_uri() + "\n"
             subprocess.run(["wl-copy", "--type", "text/uri-list"], input=file_uri.encode())
 
-        action = notify(
-            "--action=watch=Watch",
-            "--action=open=Open",
-            "--action=delete=Delete",
-            "Recording stopped",
-            f"Recording saved in {new_path}",
+        # Handle the notification's actions in a detached process so this
+        # command (and the shell's recorder state) is not held open until the
+        # notification is clicked or dismissed.
+        subprocess.Popen(
+            ["sh", "-c", _STOPPED_NOTIF_HANDLER, "sh", str(new_path), new_path.resolve().as_uri(), str(new_path.parent)],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-
-        if action == "watch":
-            subprocess.Popen(["app2unit", "-O", new_path], start_new_session=True)
-        elif action == "open":
-            p = subprocess.run(
-                [
-                    "dbus-send",
-                    "--session",
-                    "--dest=org.freedesktop.FileManager1",
-                    "--type=method_call",
-                    "/org/freedesktop/FileManager1",
-                    "org.freedesktop.FileManager1.ShowItems",
-                    f"array:string:file://{new_path}",
-                    "string:",
-                ]
-            )
-            if p.returncode != 0:
-                subprocess.Popen(["app2unit", "-O", new_path.parent], start_new_session=True)
-        elif action == "delete":
-            new_path.unlink()
